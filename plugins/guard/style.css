@@ -1,0 +1,37 @@
+/* Use the host console's typography, theme and layout tokens. */
+.guard-console{font:inherit;color:var(--text)}
+.guard-console [hidden]{display:none!important}
+.guard-console p,.guard-console small,.guard-console .muted{color:var(--muted)}
+.guard-console .message{padding:12px 15px;background:var(--surface-2);border:1px solid var(--line);border-radius:7px;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.guard-console .message[data-error=true]{color:var(--red)}
+.guard-console .cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:20px 0}
+.guard-console .card{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:18px;min-width:0}
+.guard-console .card span{display:block;color:var(--muted);font-size:11px}
+.guard-console .card strong{display:block;font:600 28px var(--mono);margin:18px 0 6px}
+.guard-console .panel{padding:20px;margin-top:16px}
+.guard-console h2{font-size:18px;margin:0 0 12px}.guard-console h3{font-size:14px}
+.guard-console .toolbar,.guard-console .actions,.guard-console .pager,.guard-console .filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.guard-console .toolbar{justify-content:space-between;margin:12px 0}
+.guard-console nav{display:flex;gap:6px;flex-wrap:wrap}
+.guard-console button{min-height:36px;padding:8px 12px;background:var(--surface-2);color:var(--text);border:1px solid var(--line);border-radius:5px;font:600 11px var(--sans);cursor:pointer}
+.guard-console button[aria-selected=true],.guard-console button.primary{background:var(--cyan-soft);color:var(--cyan);border-color:var(--cyan)}
+.guard-console button.danger,.guard-console .dirty{color:var(--red)}
+.guard-console button:disabled{opacity:.45;cursor:default}
+.guard-console input,.guard-console select,.guard-console textarea{background:var(--surface);border:1px solid var(--line-bright);color:var(--text);border-radius:5px;padding:9px 12px;font:inherit;max-width:100%}
+.guard-console input:focus,.guard-console select:focus,.guard-console textarea:focus,.guard-console button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.guard-console textarea{width:100%;min-height:160px;font:12px/1.6 var(--mono);resize:vertical}
+.guard-console .form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.guard-console label{display:block;color:var(--muted)}
+.guard-console label input,.guard-console label select{display:block;width:100%;margin-top:5px}
+.guard-console label.inline{display:flex;gap:8px;align-items:center}.guard-console label.inline input{width:auto;margin:0}
+.guard-console .weights{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.guard-console .table-scroll{overflow-x:auto}.guard-console table{width:100%;border-collapse:collapse;white-space:nowrap}
+.guard-console th,.guard-console td{text-align:left;padding:12px;border-bottom:1px solid var(--line);font-size:12px}
+.guard-console th{color:var(--muted);background:var(--surface-2);font-size:11px}
+.guard-console td.reason{white-space:normal;overflow-wrap:anywhere;max-width:360px}
+.guard-console .pager{justify-content:flex-end;margin-top:15px}.guard-console .pager .count{margin-right:auto;color:var(--muted)}
+.guard-console .filters input[type=search]{width:240px}.guard-console .filters select{width:auto;min-width:100px}.guard-console .empty{text-align:center;color:var(--muted);padding:30px}
+.guard-console pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;background:var(--surface-2);border-radius:5px;font-size:12px}
+.guard-console details{margin-top:15px}.guard-console summary{cursor:pointer;color:var(--cyan)}
+@media(max-width:1000px){.guard-console .cards{grid-template-columns:repeat(2,minmax(0,1fr))}.guard-console .form-grid,.guard-console .weights{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.guard-console .form-grid{grid-template-columns:1fr}.guard-console .panel{padding:14px}.guard-console .filters input[type=search]{width:100%}.guard-console .card strong{font-size:22px}}

@@ -19,3 +19,5 @@ Hopae owns users/principals. Guard decisions do not replace authentication.
 | Verification record | [Validation](VALIDATION.md) | [검증](ko/VALIDATION.md) |
 | Signed updates | [Updates](UPDATES.md) | [업데이트](ko/UPDATES.md) |
 | Backlog | [TODO](../TODO.md) | [TODO](../TODO.ko.md) |
+
+[Hangang console integration](CONSOLE.md)

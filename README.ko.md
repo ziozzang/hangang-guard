@@ -112,3 +112,5 @@ GeoIP 온라인 갱신·세부 운영 정책, LLM 검토 보조는 다음 단계
 ## 서명 업데이트
 
 [업데이트 신뢰 모델과 lifecycle](docs/ko/UPDATES.md)
+
+[Hangang 네이티브 Guard 메뉴](docs/ko/CONSOLE.md)는 host 인증 위임과 해시가 고정된 패키지를 사용합니다.

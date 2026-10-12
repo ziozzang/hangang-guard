@@ -78,3 +78,8 @@ prompts and use LLM queries for analysis. Decide implementation after design.
 - [ ] Sustained load, failures and distributed deployment qualification with full proxy/production traffic.
 - [ ] Design prompt-based LLM inspection using the checklist above.
 - [x] User confirmed that embedding means an embedded Lua runtime; implemented Lua 5.4.
+
+## Native Hangang console
+- [x] Trusted pinned Guard menu package, host authentication and native theme.
+- [x] Reproducible generation and host credential/role/audit bounds.
+- [ ] Coordinate verified package activation with runtime auto-updates; host pins remain explicit.
