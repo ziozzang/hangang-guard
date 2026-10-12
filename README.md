@@ -1,17 +1,23 @@
 # hangang-guard
 
-Hangang의 요청별 보안 판단을 담당하는 Rust 서비스입니다. **기본 연동은 매
-요청마다 guard 질의**이며, 선택적으로 **1~5초 캐시**를 사용할 수 있습니다.
-Guard 허용은 기존 Hangang 인증을 우회하지 않습니다.
+[한국어](README.ko.md) · [Documentation](docs/README.md)
 
-명시적으로 지정한 허니팟·스캐너 경로의 신호를 집계하고, 임계값을 넘는 IP를
-차단 후보로 관리합니다. 기본은 `observe` 모드입니다. 검토한 IP/CIDR 차단,
-허용 목록, 만료, 자동 IP 차단을 API와 내장 대시보드에서 관리합니다.
-판단은 메모리에서 처리하고 SQLite에는 정책과 제한된 집계만 저장합니다.
+A Rust security decision service and one backbone component of Hangang's
+zero-trust architecture. **Hangang queries guard on every request by default**;
+optional decision caching is restricted to **1–5 seconds**. A guard `allow`
+decision does not authenticate a user or device or bypass Hangang authentication.
+Hopae manages users/principals; guard manages IP/network policy and risk, without
+duplicating user accounts or sessions.
 
-## 실행
+Guard aggregates explicitly configured honeypot/scanner signals, maintains block
+candidates, and supports reviewed IP/CIDR blocks, allowlists, expiration and
+optional automatic IP blocking. The default policy is `observe`. Decisions run
+in memory; SQLite persists policy and bounded aggregates. The authenticated admin
+API and embedded dashboard form the control plane; Hangang enforces decisions.
 
-Rust 1.96 이상이 필요합니다.
+## Build and run
+
+Rust 1.96 or later is required.
 
 ```sh
 cargo build --release
@@ -20,50 +26,54 @@ export HANGANG_GUARD_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.to
 ./target/release/hangang-guard --listen 127.0.0.1:9080 --database ./guard.sqlite3
 ```
 
-두 토큰은 서로 달라야 하며 각각 최소 16바이트입니다. 실제 배포에서는 같은
-collector 토큰을 guard와 Hangang에 지속적으로 공급하고, 환경 파일은 권한
-`0600`으로 보호하세요. 저장소에 인증 정보를 넣지 마세요.
+The tokens must differ and each contain at least 16 bytes. Persist the same
+collector credential in guard and Hangang deployment environments; protect the
+environment file with mode `0600`. Never commit credentials.
 
-대시보드는 `http://127.0.0.1:9080/`입니다. 관리자 토큰은 브라우저 메모리에서만
-사용합니다. 원격 접근에는 HTTPS 역방향 프록시나 SSH 터널을 사용하세요.
+The dashboard is at `http://127.0.0.1:9080/`. It keeps the administrator token only
+in browser memory. Use an HTTPS reverse proxy or SSH tunnel for remote access.
 
-## Hangang 네이티브 연동
+## Native Hangang integration
 
-Hangang의 `feat/hangang-guard` 브랜치가 필요합니다.
+Use a Hangang build containing native guard support. See its
+[guard integration documentation](https://github.com/ziozzang/hangang/blob/main/docs/GUARD.md).
 
 ```sh
-# guard와 동일한 HANGANG_GUARD_COLLECTOR_TOKEN 환경에서 실행
+# Run with the same HANGANG_GUARD_COLLECTOR_TOKEN as guard.
 hangang --config hangang.json --listen 127.0.0.1:8080 \
   --guard-url http://127.0.0.1:9080 \
   --guard-honeypot-path /trap \
   --guard-scanner-path /.git/config
 ```
 
-기본은 `--guard-mode query`, 캐시 없음, 질의 타임아웃 100ms입니다. Guard
-불통 시 기본은 `--guard-failure-mode deny`로 503을 반환합니다. 명시적으로
-`allow`를 선택하면 guard 장애 시 기존 Hangang 정책으로 계속 처리합니다.
-선택적 캐시는 `--guard-cache-ms 1000`부터 `5000`까지이며 탐지 신호가 있는
-요청은 항상 guard에 전달합니다. 캐시를 켜면 정책 변경 반영에 최대 해당 TTL이
-걸릴 수 있습니다. `--guard-mode snapshot`은 별도 선택 가능한 로컬 정책
-스냅샷 방식입니다. 상세 연동은 Hangang의 `docs/GUARD.md`를 참고하세요.
+Defaults: `--guard-mode query`, no cache, 100 ms query timeout. If guard is
+unavailable, `--guard-failure-mode deny` returns 503. Explicit `allow` continues
+with existing Hangang policies on a guard failure. Optional caching uses
+`--guard-cache-ms 1000` through `5000`; requests carrying detection signals always
+reach guard. Policy changes may take up to that TTL to affect cached requests.
+`--guard-mode snapshot` selects a separate local snapshot mode with different
+failure semantics; read [operations](docs/OPERATIONS.md) before choosing it.
 
-## API
+## API and trust boundary
 
-Collector 토큰: `POST /v1/decision`, `POST /v1/events`, `GET /v1/snapshot`.
-Admin 토큰: `GET /v1/status`, `GET /v1/candidates`, `GET/PUT /v1/policy`,
-`GET/POST/DELETE /v1/blocks`, `POST /v1/candidates/approve`.
-모든 API 인증은 `Authorization: Bearer …`입니다. `/healthz`는 인증 없는
-최소 상태 확인 경로입니다. [프로토콜·설계](docs/DESIGN.md)를 참고하세요.
+Collector token: `POST /v1/decision`, `POST /v1/events`, `GET /v1/snapshot`.
+Admin token: policy, blocks, candidates, rules, GeoIP and inspection endpoints.
+All API authentication uses `Authorization: Bearer …`. `/healthz` provides a
+minimal unauthenticated health check. See [design and HTTP API](docs/DESIGN.md)
+and [rules and inspection API](docs/RULES.md).
 
-IP는 Hangang이 신뢰 프록시 경계에서 판별합니다. 임의의 X-Forwarded-For를
-그대로 믿지 않습니다. Guard 차단 요청은 증거를 갱신하지 않습니다. 허용
-목록은 guard 차단만 면제하고 다른 인증·보안 정책을 면제하지 않습니다.
+Hangang resolves client IP at its trusted-proxy boundary; arbitrary
+`X-Forwarded-For` values are not trusted. Requests denied by guard do not renew
+attack evidence. Allowlisting exempts only guard blocking, not other security or
+authentication checks. GeoIP, ASN and scores are signals for policy evaluation;
+they do not establish user or device identity.
 
-## 성능·GeoIP·동적 룰
+## Performance, GeoIP and dynamic rules
 
-IP/CIDR/ASN pool은 압축 radix tree로 조회합니다. 일반 질의는 불변 정책을
-잠금 없이 읽고 SQLite·집계 잠금·blocking worker를 거치지 않습니다. 선택적
-바이너리 TCP 연동은 연결당 한 번 인증하고 24바이트 프레임을 사용합니다.
+IP/CIDR/ASN pools use compressed radix trees. Ordinary decisions read immutable
+policy without locks, SQLite queries, aggregate locks or blocking workers. An
+optional persistent binary TCP transport authenticates once per connection and
+uses 24-byte frames.
 
 ```sh
 hangang-guard --decision-listen 127.0.0.1:9081 \
@@ -72,34 +82,43 @@ hangang-guard --decision-listen 127.0.0.1:9081 \
 hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081
 ```
 
-관리 화면에서 IP/CIDR 조회, GeoIP·ASN, 점수·의심 단계, 허용 목록, 정책과
-JSON/Lua 룰을 관리합니다. Lua는 서비스에 내장되며 룰 적용 시 검증·컴파일하고,
-요청마다 실행하지 않습니다. 룰 검증은 활성화와 분리되어 있습니다.
+The plaintext binary listener is **loopback-only**. Use secured HTTP transport for
+remote decisions. The dashboard supports IP/CIDR inspection, GeoIP/ASN, risk
+scores, suspicion stages, allowlists, policy editing and JSON/Lua rules. Embedded
+Lua 5.4 runs only when validating/applying configuration, never on each request.
+Validation and activation are separate operations.
 
-[룰·점수·GeoIP](docs/RULES.md), [바이너리 프로토콜](docs/PROTOCOL.md),
-[도구 조사](docs/TOOL_RESEARCH.md), [성능 검증](docs/PERFORMANCE.md)을 참고하세요.
+See [rules, scoring and GeoIP](docs/RULES.md), [binary protocol](docs/PROTOCOL.md),
+[tool research](docs/TOOL_RESEARCH.md) and [measured performance](docs/PERFORMANCE.md).
+The measurements qualify local decision transport, not a production capacity SLA.
 
-## 검증
+## Verification
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
-# Hangang 연동 worktree에서도 cargo build --bin hangang 실행 후
+# Also build Hangang in the integration checkout: cargo build --bin hangang
 python3 tools/e2e.py --hangang-bin ../hangang-guard-integration/target/debug/hangang
 ```
 
-E2E는 임시 DB·별도 포트·임시 토큰으로 실제 프로세스를 실행하고 종료합니다.
-운영 서버 설정을 변경하지 않습니다.
+E2E starts and stops real processes using temporary databases, ports and tokens.
+It does not modify running gateway configuration. [Validation](docs/VALIDATION.md)
+records completed checks and outstanding production qualification.
 
-## 범위와 다음 단계
+## Scope and next steps
 
-지원: 요청별 질의, 짧은 선택적 캐시, IPv4/IPv6 CIDR, 가중치 기반 제한된
-시간창 집계, 수동 후보 승인·차단 해제, 정책 변경, SQLite 복구, 오프라인
-ASN prefix catalog·GeoIP MMDB, IP/CIDR risk 조회, 내장 Lua/JSON 동적 룰,
-관리자 대시보드, Hangang 네이티브 HTTP/TCP 연동.
+Implemented: per-request decisions, optional short cache, IPv4/IPv6 CIDRs,
+bounded weighted-window aggregation, reviewed approval/unblocking, policy changes,
+SQLite restoration, offline ASN prefix catalogs and GeoIP MMDB, IP/CIDR inspection,
+embedded Lua/JSON rules, admin dashboard and native Hangang HTTP/TCP integration.
 
-ASN 정보는 분류를 위한 보조 자료입니다. ASN 전체 차단은 자동화하지 않습니다.
-온라인 ASN 풀 갱신, 서명된 공격 패턴 피드, ASN 차단 제안의 영향 분석,
-GeoIP 온라인 갱신·세부 운영 정책, LLM 검토 보조는 다음 단계입니다. 운영 적용 순서와 한계는
-[운영 문서](docs/OPERATIONS.md), 작업 절차는 [설계](docs/DESIGN.md)에 있습니다.
+ASN is classification metadata; ASN-wide automatic blocking is not enabled.
+Online ASN updates, authenticated attack-pattern feeds, reviewed ASN impact
+analysis, online GeoIP refresh and prompt-based LLM inspection remain in the
+[backlog](TODO.md). See [operations](docs/OPERATIONS.md) for rollout and recovery,
+and [design](docs/DESIGN.md) for the delivery procedure.
+
+## Signed updates
+
+[Update trust model and lifecycle](docs/UPDATES.md)

@@ -1,6 +1,8 @@
 mod geoip;
 mod lua_rules;
 mod protocol;
+#[cfg(target_os = "linux")]
+mod supervisor;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State as HttpState},
@@ -21,8 +23,42 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(name = "hangang-guard")]
+#[command(
+    name = "hangang-guard",
+    version,
+    about = "Zero-trust IP/network decision authority"
+)]
+#[command(group(clap::ArgGroup::new("update_source").args(["update_manifest", "update_github"]).requires("supervised")))]
 struct Args {
+    /// Report version, identity, and capabilities without starting the service.
+    #[arg(long)]
+    about: bool,
+    /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
+    #[arg(long)]
+    check: bool,
+    /// Discover latest stable GitHub release without activating it.
+    #[arg(long)]
+    check_update: bool,
+    /// Linux stable-PID owner, retaining listeners across a single-writer replacement.
+    #[arg(long)]
+    supervised: bool,
+    #[arg(long, hide = true)]
+    serve_child: bool,
+    #[arg(long)]
+    update_manifest: Option<String>,
+    #[arg(long)]
+    update_github: bool,
+    #[arg(long, default_value = "HANGANG_GUARD_UPDATE_KEY")]
+    update_key_env: String,
+    #[arg(long, requires = "update_source", conflicts_with = "update_github")]
+    update_ca: Option<PathBuf>,
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(10..))]
+    update_interval_seconds: u64,
+    #[arg(long, requires = "supervised")]
+    update_status_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..=15))]
+    update_grace_seconds: u64,
+
     #[arg(long, default_value = "127.0.0.1:9080")]
     listen: String,
     /// Optional loopback-only persistent binary decision endpoint.
@@ -58,6 +94,8 @@ struct App {
     geo_reload: Arc<tokio::sync::Semaphore>,
     collector: Arc<String>,
     admin: Arc<String>,
+    update_status: Option<PathBuf>,
+    update_request: Option<PathBuf>,
 }
 impl App {
     fn query<'a>(
@@ -430,6 +468,8 @@ fn router(app: App) -> Router {
         .route("/v1/events", post(events))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/status", get(status))
+        .route("/v1/update/status", get(update_status))
+        .route("/v1/update/check", post(update_check))
         .route(
             "/v1/lookup",
             post(lookup).layer(DefaultBodyLimit::max(4096)),
@@ -508,8 +548,167 @@ fn open_database(path: &std::path::Path) -> anyhow::Result<Connection> {
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS checkpoint(id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);")?;
     Ok(db)
 }
+
+async fn update_status(HttpState(app): HttpState<App>) -> ApiResult {
+    let Some(path) = app.update_status else {
+        return Ok(Json(
+            json!({"enabled":false,"phase":"disabled","current_version":env!("CARGO_PKG_VERSION")}),
+        ));
+    };
+    let result = tokio::task::spawn_blocking(move || read_bounded(&path, 16 * 1024))
+        .await
+        .map_err(|_| error(StatusCode::SERVICE_UNAVAILABLE, "update status unavailable"))?;
+    let bytes =
+        result.map_err(|_| error(StatusCode::SERVICE_UNAVAILABLE, "update status unavailable"))?;
+    Ok(Json(serde_json::from_slice(&bytes).map_err(|_| {
+        error(StatusCode::SERVICE_UNAVAILABLE, "invalid update status")
+    })?))
+}
+
+async fn update_check(HttpState(app): HttpState<App>) -> ApiResult {
+    let Some(path) = app.update_request else {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "automatic updates are disabled",
+        ));
+    };
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    match options.open(path).await {
+        Ok(file) => file.sync_all().await.map_err(|_| {
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "could not queue update check",
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => {
+            return Err(error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "could not queue update check",
+            ));
+        }
+    }
+    Ok(Json(json!({"queued":true})))
+}
+
+fn read_bounded(path: &std::path::Path, max: usize) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "configured input is not a regular file"
+    );
+    let mut bytes = Vec::new();
+    file.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= max, "configured input exceeds size limit");
+    Ok(bytes)
+}
+
+fn check_configuration(args: &Args) -> anyhow::Result<()> {
+    if args.update_github || args.update_manifest.is_some() {
+        let key = std::env::var(&args.update_key_env)
+            .map_err(|_| anyhow::anyhow!("update public-key environment variable unavailable"))?;
+        guard_update::update::TrustKey::from_base64(&key)?;
+    }
+    if let Some(path) = &args.update_ca {
+        reqwest::Certificate::from_pem(&read_bounded(path, 128 * 1024)?)?;
+    }
+    let collector = std::env::var("HANGANG_GUARD_COLLECTOR_TOKEN")?;
+    let admin = std::env::var("HANGANG_GUARD_ADMIN_TOKEN")?;
+    anyhow::ensure!(
+        (16..=4096).contains(&collector.len())
+            && (16..=4096).contains(&admin.len())
+            && collector != admin,
+        "tokens must be distinct and 16..4096 bytes"
+    );
+    let mut engine = if args.database.exists() {
+        let db = Connection::open_with_flags(
+            &args.database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let saved = db.query_row("SELECT body FROM checkpoint WHERE id=1", [], |r| {
+            r.get::<_, String>(0)
+        });
+        match saved {
+            Ok(body) => Engine::restore(serde_json::from_str(&body)?)?,
+            Err(rusqlite::Error::QueryReturnedNoRows) => Engine::new(Policy::default())?,
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        let parent = args
+            .database
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        anyhow::ensure!(parent.is_dir(), "database directory does not exist");
+        Engine::new(Policy::default())?
+    };
+    if let Some(path) = &args.policy {
+        engine.set_policy(serde_json::from_slice(&read_bounded(
+            path,
+            4 * 1024 * 1024,
+        )?)?)?;
+    }
+    if let Some(path) = &args.asn_catalog {
+        engine.set_asn_catalog(serde_json::from_slice(&read_bounded(
+            path,
+            16 * 1024 * 1024,
+        )?)?)?;
+    }
+    geoip::GeoCatalog::load(&geoip::GeoPaths {
+        country: args.geoip_database.clone(),
+        asn: args.geoip_asn_database.clone(),
+    })?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn worker_arguments() -> Vec<std::ffi::OsString> {
+    let mut input = std::env::args_os().skip(1);
+    let mut result = Vec::new();
+    while let Some(arg) = input.next() {
+        let name = arg.to_str().unwrap_or("").split('=').next().unwrap_or("");
+        if matches!(
+            name,
+            "--supervised"
+                | "--serve-child"
+                | "--update-github"
+                | "--check"
+                | "--check-update"
+                | "--about"
+        ) {
+            continue;
+        }
+        if matches!(
+            name,
+            "--update-manifest"
+                | "--update-ca"
+                | "--update-key-env"
+                | "--update-interval-seconds"
+                | "--update-status-file"
+                | "--update-grace-seconds"
+        ) {
+            if !arg.to_str().unwrap_or("").contains('=') {
+                input.next();
+            }
+            continue;
+        }
+        result.push(arg);
+    }
+    result
+}
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if args.about {
+        println!(
+            "{}",
+            json!({"name":"hangang-guard","version":env!("CARGO_PKG_VERSION"),"repository":"https://github.com/ziozzang/hangang-guard","role":"zero-trust IP/network decision authority","principal_management":"hopae","target":env!("GUARD_TARGET"),"supervised_updates":cfg!(target_os="linux")})
+        );
+        return Ok(());
+    }
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(args.threads as usize)
         .enable_all()
@@ -517,6 +716,74 @@ fn main() -> anyhow::Result<()> {
         .block_on(run(args))
 }
 async fn run(args: Args) -> anyhow::Result<()> {
+    if args.check_update {
+        let release = guard_update::github_release::latest().await?;
+        println!(
+            "{}",
+            serde_json::to_string(&release.check(
+                semver::Version::parse(env!("CARGO_PKG_VERSION"))?,
+                env!("GUARD_TARGET")
+            )?)?
+        );
+        return Ok(());
+    }
+    if let Some(address) = args.decision_listen {
+        anyhow::ensure!(
+            address.ip().is_loopback(),
+            "binary decision listener must bind loopback"
+        );
+    }
+    if args.check {
+        check_configuration(&args)?;
+        println!("configuration valid");
+        return Ok(());
+    }
+    if args.supervised && !args.serve_child {
+        #[cfg(target_os = "linux")]
+        {
+            check_configuration(&args)?;
+            let update = if args.update_github || args.update_manifest.is_some() {
+                let public_key = std::env::var(&args.update_key_env).map_err(|_| {
+                    anyhow::anyhow!("update public-key environment variable unavailable")
+                })?;
+                guard_update::update::TrustKey::from_base64(&public_key)?;
+                Some(supervisor::UpdateOptions {
+                    manifest_url: args.update_manifest.clone(),
+                    github: args.update_github,
+                    additional_ca: args.update_ca.clone(),
+                    public_key,
+                    interval: std::time::Duration::from_secs(args.update_interval_seconds),
+                    status_path: args
+                        .update_status_file
+                        .clone()
+                        .unwrap_or_else(|| args.database.with_extension("update-status.json")),
+                })
+            } else {
+                None
+            };
+            return supervisor::run(supervisor::Options {
+                http: args.listen.parse().map_err(|_| {
+                    anyhow::anyhow!("supervised listener must be a literal IP:port")
+                })?,
+                decision: args.decision_listen,
+                database: args.database.clone(),
+                worker_arguments: worker_arguments(),
+                update,
+                grace: std::time::Duration::from_secs(args.update_grace_seconds),
+            })
+            .await;
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("supervised automatic updates require Linux");
+    }
+    if args.serve_child {
+        anyhow::ensure!(
+            std::env::var("HANGANG_GUARD_WORKER").as_deref() == Ok("1"),
+            "private worker handshake unavailable"
+        );
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("supervised workers require Linux");
+    }
     let collector = std::env::var("HANGANG_GUARD_COLLECTOR_TOKEN")?;
     let admin = std::env::var("HANGANG_GUARD_ADMIN_TOKEN")?;
     anyhow::ensure!(
@@ -557,6 +824,14 @@ async fn run(args: Args) -> anyhow::Result<()> {
         workers: Arc::new(tokio::sync::Semaphore::new(1024)),
         collector: Arc::new(collector),
         admin: Arc::new(admin),
+        update_status: args
+            .serve_child
+            .then(|| std::env::var_os("HANGANG_GUARD_UPDATE_STATUS").map(PathBuf::from))
+            .flatten(),
+        update_request: args
+            .serve_child
+            .then(|| std::env::var_os("HANGANG_GUARD_UPDATE_REQUEST").map(PathBuf::from))
+            .flatten(),
     };
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
     let binary_worker = if let Some(address) = args.decision_listen {
@@ -564,7 +839,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
             address.ip().is_loopback(),
             "binary decision listener must bind loopback"
         );
-        let binary = tokio::net::TcpListener::bind(address).await?;
+        let binary = if args.serve_child {
+            #[cfg(target_os = "linux")]
+            {
+                supervisor::inherited_listener("HANGANG_GUARD_DECISION_FD", address)?
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                anyhow::bail!("supervised workers require Linux");
+            }
+        } else {
+            tokio::net::TcpListener::bind(address).await?
+        };
         eprintln!("binary decisions listening on {}", binary.local_addr()?);
         Some(tokio::spawn(protocol::serve(
             binary,
@@ -581,7 +867,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
             tokio::select! {_ = interval.tick()=>{let a=checkpoint_app.clone();if let Err(e)=checkpoint(a).await {eprintln!("checkpoint failed: {e}");}}, _=stop_rx.changed()=>break}
         }
     });
-    let listener = tokio::net::TcpListener::bind(&args.listen).await?;
+    let listener = if args.serve_child {
+        #[cfg(target_os = "linux")]
+        {
+            supervisor::inherited_listener("HANGANG_GUARD_HTTP_FD", args.listen.parse()?)?
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            anyhow::bail!("supervised workers require Linux");
+        }
+    } else {
+        tokio::net::TcpListener::bind(&args.listen).await?
+    };
     eprintln!("hangang-guard listening on {}", listener.local_addr()?);
     let shutdown_stop = stop_tx.clone();
     let listener = listener.tap_io(|stream| {
@@ -589,6 +886,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
             eprintln!("HTTP TCP_NODELAY failed: {e}");
         }
     });
+    if args.serve_child {
+        #[cfg(target_os = "linux")]
+        supervisor::notify_ready()?;
+    }
     let serving = axum::serve(listener, router(app.clone()))
         .with_graceful_shutdown(async move {
             shutdown().await;
@@ -660,6 +961,8 @@ mod tests {
             workers: Arc::new(tokio::sync::Semaphore::new(1024)),
             collector: Arc::new("collector-test-token".into()),
             admin: Arc::new("admin-test-token".into()),
+            update_status: None,
+            update_request: None,
         }
     }
 

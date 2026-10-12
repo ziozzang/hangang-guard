@@ -1,0 +1,23 @@
+[package]
+name = "guard-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "stream", "json"] }
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

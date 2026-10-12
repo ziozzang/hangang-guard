@@ -1,15 +1,20 @@
 # hangang-guard design and delivery procedure
 
+[한국어](ko/DESIGN.md) · [Documentation index](README.md)
+
 Status: accepted implementation baseline, 2026-10-12. Project name: hangang-guard.
 The existing directory remains hangang-safe to preserve the current workspace.
 
 ## Purpose and boundaries
-A Rust control service consumes authenticated security signals from Hangang, keeps
+A Rust IP/network policy and risk service, one component of the zero-trust backbone,
+consumes authenticated security signals from Hangang, keeps
 bounded per-IP evidence, creates block candidates (BCL), and provides per-request
 remote decisions and optional expiring policy snapshots. Hangang is a first-class
 zero-trust decision client: by default each request calls the guard asynchronously.
 Guard decisions use memory, with no database, ASN-provider or LLM query. Optional
 short-lived decision caching and snapshot enforcement are explicit modes.
+Hopae manages users/principals; guard does not duplicate user accounts or sessions.
+A guard allow decision does not authenticate a user or device.
 Existing authentication, zero-trust, allow/deny and request defenses remain in
 force independently. A guard allowlist only exempts an IP from guard blocking.
 
@@ -60,8 +65,9 @@ Default maximum tracked IPs: 10,000; maximum block entries: 100,000; event batch
 256; maximum HTTP body/snapshot: 4 MiB; native event queue: 4,096; decision refresh:
 2 seconds; snapshot validity: 30 seconds. Candidate window default 60 seconds;
 block lifetime 15 minutes. Bounded counters expose dropped events and capacity
-rejections. Prefix lookup performs at most 33 IPv4 / 129 IPv6 hash lookups rather
-than scanning all blocks. Numbers are budgets to validate, not measured claims.
+rejections. The initial prefix index used bounded IPv4/IPv6 hash probes; the current
+implementation uses compressed radix trees. Numeric limits are budgets, not
+measured capacity claims.
 Remote query is the default and must be measured under load. Optional decision
 cache defaults off; when enabled its configured TTL must be 1–5 seconds. It has bounded IP capacity, and TTL is the minimum of configured
 TTL and server ttl_ms (server max 5 seconds). A revision change clears old cached
@@ -128,7 +134,8 @@ not advertise CrowdSec compatibility without implementing that protocol.
 Future phases: authenticated/signed pattern feeds with provenance and rollback;
 ASN/GeoIP background refresh with last-good catalogs; reviewed ASN proposals and
 impact estimates; fleet identities, audit history, distributed sync and retention.
-GeoIP remains in Hangang until measurements justify moving it. External feeds and
+The initial plan retained GeoIP in Hangang; the current extension below also
+supports local GeoIP in guard. External feeds and
 LLM suggestions are optional extensions, not prerequisites for local protection.
 
 ## Verification gates
@@ -159,7 +166,7 @@ sufficient qualification. Use compact radix indexes for IPv4/IPv6 allow, block
 and ASN pools. Publish immutable decision views atomically; ordinary decisions
 must avoid the engine mutex, SQLite, spawn_blocking, string IP parsing and generic
 JSON intermediate values. Evidence ingestion and durable administration retain
-a separate serialized control path. Query remains default, optional cache 1–5s.
+a separate serialized control path. Query remains default, optional cache 1–5 s.
 
 Add an optional loopback-only authenticated persistent binary decision listener
 with fixed-size frames and bounded connections/idle deadlines; HTTP remains for

@@ -53,6 +53,10 @@ def route(r):
         return
     if path == 'status':
         data = {'health': 'ok', 'capacity': {'candidates': len(candidates), 'blocks': len(blocks), 'max_candidates': 10000, 'max_blocks': 100000}, 'stats': {'accepted': 20000, 'dropped_capacity': 3, 'block_capacity_rejections': 0}, 'metrics': {'index': 'radix'}, 'geoip': {'country': {'database_type': 'GeoLite2-Country', 'build_epoch': now, 'bytes': 4096}, 'asn': None}}
+    elif path == 'update/status':
+        data = {'enabled': True, 'phase': 'up_to_date', 'current_version': '0.3.0'}
+    elif path == 'update/check':
+        data = {'queued': True}
     elif path == 'policy':
         if req.method == 'PUT':
             policy = body
@@ -204,6 +208,11 @@ with sync_playwright() as p:
     page.locator('#rules-load').click()
     page.locator('#message').filter(has_text='저장된 JSON 규칙을 불러').wait_for()
     assert 'return' in page.locator('#rules-lua').input_value()
+    page.locator('#tab-update').click()
+    page.locator('#update-fetch').click()
+    page.locator('#update-result').filter(has_text='up_to_date').wait_for()
+    page.locator('#update-check').click()
+    page.locator('#update-result').filter(has_text='queued').wait_for()
     page.locator('#tab-geoip').click()
     page.locator('#geoip-status').click()
     page.locator('#message').filter(has_text='GeoIP 상태를 확인').wait_for()

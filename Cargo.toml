@@ -1,12 +1,12 @@
 [workspace]
-members = ["crates/guard-core", "crates/guard-server", "crates/guard-load"]
+members = ["crates/guard-core", "crates/guard-server", "crates/guard-load", "crates/guard-update"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
-version = "0.1.0"
+version = "0.3.0"
 
 [profile.release]
 lto = "thin"
