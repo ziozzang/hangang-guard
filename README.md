@@ -1,6 +1,10 @@
-# hangang-guard
+# Sumunjang (수문장)
 
 [한국어](README.ko.md) · [Documentation](docs/README.md)
+
+Sumunjang is the component name of `hangang-guard`. Existing repository, binary,
+protocol and updater identifiers remain compatible. Pumgye owns service/user/IP
+authorization; Sumunjang supplies network admission and risk evidence.
 
 A Rust security decision service and one backbone component of Hangang's
 zero-trust architecture. **Hangang queries guard on every request by default**;
