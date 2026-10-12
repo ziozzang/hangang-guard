@@ -45,7 +45,7 @@ class PreparationTests(unittest.TestCase):
 
     def fake_run(self, command):
         if command[1] == "--version":
-            return "hangang-guard 0.3.0"
+            return f"{Path(command[0]).name} 0.3.0"
         if command[1] == "--public-key":
             return self.key
         payload = Path(command[1]).read_bytes()
@@ -64,7 +64,7 @@ class PreparationTests(unittest.TestCase):
                 self.assertEqual(artifact.read_bytes(), b"#!/bin/sh\nexit 0\n")
                 archive_path = next(output.glob("*.tar.gz"))
                 with tarfile.open(archive_path) as archive:
-                    self.assertEqual({Path(item.name).name for item in archive}, {"hangang-guard", "guard-release-sign", "LICENSE"})
+                    self.assertEqual({Path(item.name).name for item in archive}, {"sumunjang", "hangang-guard", "guard-release-sign", "LICENSE"})
                     self.assertTrue(all(item.mtime == 0 and item.uid == 0 and item.gid == 0 for item in archive))
                 for line in (output / "SHA256SUMS").read_text().splitlines():
                     expected, name = line.split("  ")
@@ -73,11 +73,12 @@ class PreparationTests(unittest.TestCase):
     def test_signed_payload_binds_version_target_url_size_digest(self):
         (self.root / "release-public-key.txt").write_text(self.key + "\n")
         release.prepare(self.seed, self.output, release.TARGET)
+        self.assertEqual(len(self.payloads), 2)
         payload = self.payloads[0]
-        artifact = self.output / f"hangang-guard-{release.TARGET}"
+        artifact = self.output / f"sumunjang-{release.TARGET}"
         self.assertEqual(payload["version"], "0.3.0")
         self.assertEqual(payload["target"], release.TARGET)
-        self.assertEqual(payload["artifact_url"], f"https://github.com/ziozzang/hangang-guard/releases/download/v0.3.0/hangang-guard-{release.TARGET}")
+        self.assertEqual(payload["artifact_url"], f"https://github.com/ziozzang/hangang-guard/releases/download/v0.3.0/sumunjang-{release.TARGET}")
         self.assertEqual(payload["size"], artifact.stat().st_size)
         self.assertEqual(payload["sha256"], hashlib.sha256(artifact.read_bytes()).hexdigest())
         self.assertFalse(list(self.output.glob(".release-payload-*")))

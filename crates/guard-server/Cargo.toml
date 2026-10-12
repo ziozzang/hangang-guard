@@ -1,10 +1,16 @@
 [package]
 name = "guard-server"
+default-run = "sumunjang"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "sumunjang"
+path = "src/main.rs"
+
+# Compatibility executable for existing installations.
 [[bin]]
 name = "hangang-guard"
 path = "src/main.rs"

@@ -44,7 +44,7 @@ def proc_sample(pid):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--guard-bin', default='target/release/hangang-guard')
+    parser.add_argument('--guard-bin', default='target/release/sumunjang')
     parser.add_argument('--load-bin', default='target/release/guard-load')
     parser.add_argument('--baseline-bin', default='/tmp/hangang-guard-baseline')
     parser.add_argument('--output', default='docs/performance-results.json')

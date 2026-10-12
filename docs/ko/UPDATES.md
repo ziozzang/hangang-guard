@@ -84,7 +84,7 @@ zero-trust 경로는 fail-closed를 선택하세요. 운영자가 선택한 fail
 공급한 뒤 설치된 서비스를 실행합니다.
 
 ```sh
-hangang-guard --supervised --database /var/lib/hangang-guard/policy.sqlite3 \
+sumunjang --supervised --database /var/lib/hangang-guard/policy.sqlite3 \
   --listen 127.0.0.1:9080 --decision-listen 127.0.0.1:9081 \
   --update-github --update-key-env HANGANG_GUARD_UPDATE_KEY \
   --update-interval-seconds 300
@@ -152,3 +152,11 @@ Linux fixture는 실행파일 복사본·임시 키/DB/포트만 사용합니다
 서명 preflight, 활성화, 정책 유지, readiness 실패 rollback, 변조 거부 및
 취소를 검사합니다. 미래 버전 launcher는 소유한 runtime에 위임하므로 임의
 schema migration 검증을 의미하지 않습니다.
+
+## v0.3.2 실행 파일 이름 전환
+
+기본 실행 파일·릴리즈 자산은 `sumunjang`입니다. 아카이브에 `hangang-guard` 호환
+실행 파일을 포함하고 양쪽 대상별 자산·manifest를 서명합니다. 새 클라이언트는
+수문장 자산을 우선하며 기존 클라이언트는 기존 자산으로 업데이트할 수 있습니다.
+새 자산 쌍이 일부만 있으면 거부합니다. 서명 검증 후 정확한 실행 이름과 버전을
+검증합니다. 저장소 URL·프로토콜·자격 증명 환경변수는 유지합니다.
