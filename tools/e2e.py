@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -73,8 +74,11 @@ def main():
     processes = []
     with tempfile.TemporaryDirectory(prefix='hangang-guard-e2e-') as directory:
         directory = Path(directory)
-        gp, pp, ap = port(), port(), port()
+        gp, pp, ap, tp = port(), port(), port(), port()
         base, proxy = f'http://127.0.0.1:{gp}', f'http://127.0.0.1:{pp}'
+        geo_path = directory / 'geoip.mmdb'
+        shutil.copyfile(Path(__file__).resolve().parents[1] / 'crates/guard-server/fixtures/GeoIP2-City-Test.mmdb', geo_path)
+        geo_original = geo_path.read_bytes()
         config = {'revision': 0, 'http': [{'id': 'e2e', 'path_prefix': '/',
                   'backends': [f'http://127.0.0.1:{origin.server_port}']}], 'tcp': []}
         (directory / 'hangang.json').write_text(json.dumps(config))
@@ -94,7 +98,8 @@ def main():
                     proc.kill()
                     proc.wait()
         try:
-            guard_cmd = [guard_bin, '--listen', f'127.0.0.1:{gp}', '--database', str(directory / 'state.sqlite3')]
+            guard_cmd = [guard_bin, '--listen', f'127.0.0.1:{gp}', '--database', str(directory / 'state.sqlite3'),
+                         '--decision-listen', f'127.0.0.1:{tp}', '--geoip-database', str(geo_path)]
             guard = start(guard_cmd, 'guard')
             eventually(lambda: request(base, '/healthz')[0] == 200, 'guard startup')
             assert request(base, '/v1/policy', collector)[0] == 401
@@ -142,6 +147,40 @@ def main():
             stop(guard)
             native = start(native_cmd + ['--guard-failure-mode', 'allow'], 'hangang-fail-allow')
             eventually(lambda: request(proxy, '/ordinary')[0] == 200, 'explicit fail-allow startup')
+            stop(native)
+            guard = start(guard_cmd, 'guard-tcp')
+            eventually(lambda: request(base, '/healthz')[0] == 200, 'TCP authority startup')
+            native = start(native_cmd + ['--guard-decision-tcp', f'127.0.0.1:{tp}'], 'hangang-tcp')
+            eventually(lambda: request(proxy, '/ordinary')[0] == 403, 'native TCP block')
+            assert request(base, '/v1/blocks', admin, {'network': '127.0.0.1/32'}, 'DELETE')[0] == 200
+            assert request(proxy, '/ordinary')[0] == 200
+            found = json.loads(request(base, '/v1/lookup', admin, {'ip': '81.2.69.160'})[1])
+            assert found['geoip']['country_code'] == 'GB' and found['geoip']['city'] == 'London'
+            geo_path.write_bytes(b'invalid database')
+            assert request(base, '/v1/geoip/reload', admin, {})[0] == 400
+            found = json.loads(request(base, '/v1/lookup', admin, {'ip': '81.2.69.160'})[1])
+            assert found['geoip']['country_code'] == 'GB'  # last good DB survives
+            geo_path.write_bytes(geo_original)
+            assert request(base, '/v1/geoip/reload', admin, {})[0] == 200
+            script = "return {version=1,rules={{id='loopback-test',network='127.0.0.1/32',action='deny',score=15}}}"
+            assert request(base, '/v1/rules/validate', admin, {'script': script})[0] == 200
+            assert request(proxy, '/ordinary')[0] == 200  # dry run does not activate
+            assert request(base, '/v1/rules/lua', admin, {'script': script}, 'PUT')[0] == 200
+            assert request(proxy, '/ordinary')[0] == 403  # same rules on native binary transport
+            found = json.loads(request(base, '/v1/lookup', admin, {'ip': '127.0.0.1'})[1])
+            assert found['inspection']['static_rule_score'] == 15
+            assert found['inspection']['suspicion'] == 'blocked'
+            assert request(base, '/v1/networks/inspect', admin, {'network': '127.0.0.0/24'})[0] == 200
+            assert request(base, '/v1/snapshot', collector)[0] == 501
+            stop(guard)
+            assert request(proxy, '/ordinary')[0] == 503
+            guard = start(guard_cmd, 'guard-rules-restart')
+            eventually(lambda: request(base, '/healthz')[0] == 200, 'rules restart')
+            eventually(lambda: request(proxy, '/ordinary')[0] == 403, 'durable rule and TCP reconnect')
+            assert request(base, '/v1/rules', admin, {'version': 1, 'rules': []}, 'PUT')[0] == 200
+            assert request(proxy, '/ordinary')[0] == 200
+            print('PASS: native TCP, GeoIP city lookup/reload/last-good, Lua dry-run/apply, IP risk,')
+            print('      CIDR inspection, snapshot rejection, durable rules and TCP reconnect')
             print('PASS: remote query, credential separation, observe candidate, approval, deny, no renewal,')
             print('      allow precedence, fail-deny, SQLite restart, 1-second cache, explicit fail-allow')
         except Exception:

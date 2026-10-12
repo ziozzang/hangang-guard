@@ -1,9 +1,13 @@
+mod geoip;
+mod lua_rules;
+mod protocol;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State as HttpState},
     http::{HeaderMap, StatusCode},
-    response::Html,
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
+    serve::ListenerExt,
 };
 use clap::Parser;
 use guard_core::{Block, Engine, EventBatch, Policy};
@@ -21,12 +25,23 @@ use std::{
 struct Args {
     #[arg(long, default_value = "127.0.0.1:9080")]
     listen: String,
+    /// Optional loopback-only persistent binary decision endpoint.
+    #[arg(long)]
+    decision_listen: Option<std::net::SocketAddr>,
+    #[arg(long,default_value_t=4096,value_parser=clap::value_parser!(u32).range(1..=65536))]
+    max_http_requests: u32,
+    #[arg(long,default_value_t=8,value_parser=clap::value_parser!(u16).range(1..=64))]
+    threads: u16,
     #[arg(long, default_value = "hangang-guard.sqlite3")]
     database: PathBuf,
     #[arg(long)]
     policy: Option<PathBuf>,
     #[arg(long)]
     asn_catalog: Option<PathBuf>,
+    #[arg(long)]
+    geoip_database: Option<PathBuf>,
+    #[arg(long)]
+    geoip_asn_database: Option<PathBuf>,
 }
 struct Inner {
     engine: Engine,
@@ -34,10 +49,30 @@ struct Inner {
 #[derive(Clone)]
 struct App {
     inner: Arc<Mutex<Inner>>,
+    view: Arc<arc_swap::ArcSwap<guard_core::DecisionView>>,
     db: Arc<Mutex<Connection>>,
     workers: Arc<tokio::sync::Semaphore>,
+    max_http_requests: usize,
+    geo: Arc<arc_swap::ArcSwap<geoip::GeoCatalog>>,
+    geo_paths: Arc<geoip::GeoPaths>,
+    geo_reload: Arc<tokio::sync::Semaphore>,
     collector: Arc<String>,
     admin: Arc<String>,
+}
+impl App {
+    fn query<'a>(
+        &self,
+        view: &'a guard_core::DecisionView,
+        ip: std::net::IpAddr,
+        time: u64,
+    ) -> guard_core::DecisionRef<'a> {
+        if view.requires_geo() {
+            let geo = self.geo.load();
+            view.query_ip_context(ip, time, geo.context(ip))
+        } else {
+            view.query_ip(ip, time)
+        }
+    }
 }
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 fn error(code: StatusCode, message: impl ToString) -> (StatusCode, Json<Value>) {
@@ -50,16 +85,16 @@ fn now() -> u64 {
         .as_secs()
 }
 fn authorize(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    let expected = format!("Bearer {token}");
     let supplied = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+    let supplied = supplied.strip_prefix("Bearer ").unwrap_or("");
     // Comparison visits every credential byte for equal-length credentials.
-    let different = supplied.len() != expected.len()
+    let different = supplied.len() != token.len()
         || supplied
             .bytes()
-            .zip(expected.bytes())
+            .zip(token.bytes())
             .fold(0u8, |a, (b, c)| a | (b ^ c))
             != 0;
     if different {
@@ -110,6 +145,9 @@ where
         } else {
             f(&mut inner.engine).map_err(|e| error(StatusCode::BAD_REQUEST, e))?
         };
+        if inner.engine.revision() != app.view.load().revision {
+            app.view.store(Arc::new(inner.engine.decision_view()));
+        }
         drop(inner);
         if serde_json::to_vec(&value)
             .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "serialization failed"))?
@@ -127,12 +165,7 @@ where
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "worker failed"))?
 }
 
-async fn events(
-    HttpState(app): HttpState<App>,
-    headers: HeaderMap,
-    Json(batch): Json<EventBatch>,
-) -> ApiResult {
-    authorize(&headers, &app.collector)?;
+async fn events(HttpState(app): HttpState<App>, Json(batch): Json<EventBatch>) -> ApiResult {
     let received = now();
     if batch.events.len() > 256
         || batch.source_id.is_empty()
@@ -152,10 +185,24 @@ async fn events(
     })
     .await
 }
-async fn snapshot(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
-    authorize(&headers, &app.collector)?;
-    operation(app, false, |e| Ok(serde_json::to_value(e.snapshot(now()))?)).await
+async fn snapshot(HttpState(app): HttpState<App>) -> ApiResult {
+    operation(app, false, |e| {
+        anyhow::ensure!(
+            e.rules().rules.is_empty(),
+            "dynamic rules require decision protocol"
+        );
+        Ok(serde_json::to_value(e.snapshot(now()))?)
+    })
+    .await
+    .map_err(|(code, body)| {
+        if body.0["error"] == "dynamic rules require decision protocol" {
+            (StatusCode::NOT_IMPLEMENTED, body)
+        } else {
+            (code, body)
+        }
+    })
 }
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DecisionRequest {
@@ -165,77 +212,78 @@ struct DecisionRequest {
 }
 async fn decision(
     HttpState(app): HttpState<App>,
-    headers: HeaderMap,
     Json(input): Json<DecisionRequest>,
-) -> ApiResult {
-    authorize(&headers, &app.collector)?;
+) -> Result<Response, (StatusCode, Json<Value>)> {
     if input.source_id.is_empty() || input.source_id.len() > 64 {
         return Err(error(StatusCode::BAD_REQUEST, "invalid source ID"));
     }
+    let time = now();
+    let view = app.view.load();
+    let before = app.query(&view, input.ip, time);
+    // Admission reads never wait for evidence aggregation or admin fsync.
+    if input.kind.is_none() || before.action == "deny" {
+        return Ok(Json(before).into_response());
+    }
+    drop(view);
+    let geo = app.geo.load_full();
     operation(app, false, move |engine| {
-        let time = now();
         let ip = input.ip.to_string();
-        let before = engine.decision(&ip, time)?;
-        if before.action == "deny" {
-            return Ok(serde_json::to_value(before)?);
-        }
-        if let Some(kind) = input.kind {
+        if engine
+            .decision_context(&ip, time, geo.context(input.ip))?
+            .action
+            != "deny"
+        {
             engine.ingest(
                 EventBatch {
                     source_id: input.source_id,
                     events: vec![guard_core::Event {
                         ip: ip.clone(),
-                        kind,
+                        kind: input.kind.expect("kind checked"),
                         observed_at: time,
                     }],
                 },
                 time,
             )?;
         }
-        Ok(serde_json::to_value(engine.decision(&ip, time)?)?)
+        Ok(serde_json::to_value(engine.decision_context(
+            &ip,
+            time,
+            geo.context(input.ip),
+        )?)?)
     })
     .await
+    .map(IntoResponse::into_response)
 }
-async fn status(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
-    authorize(&headers, &app.admin)?;
-    operation(app, false, |e| {let (candidates,blocks)=e.capacity();Ok(json!({"health":"ok","stats":e.stats(),"capacity":{"candidates":candidates,"blocks":blocks,"max_candidates":guard_core::MAX_CANDIDATES,"max_blocks":guard_core::MAX_BLOCKS,"max_batch":256,"max_body_bytes":4*1024*1024,"max_workers":1024,"max_requests":64}}))}).await
+
+async fn status(HttpState(app): HttpState<App>) -> ApiResult {
+    let max_requests = app.max_http_requests;
+    let geoip = app.geo.load().status();
+    operation(app,false,move|e|{let(candidates,blocks)=e.capacity();Ok(json!({"health":"ok","stats":e.stats(),"geoip":geoip,"rules":{"count":e.rules().rules.len(),"snapshot_supported":e.rules().rules.is_empty()},"capacity":{"candidates":candidates,"blocks":blocks,"max_candidates":guard_core::MAX_CANDIDATES,"max_blocks":guard_core::MAX_BLOCKS,"max_batch":256,"max_body_bytes":4*1024*1024,"max_workers":1024,"max_requests":max_requests}}))}).await
 }
-async fn candidates(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+
+async fn candidates(HttpState(app): HttpState<App>) -> ApiResult {
     operation(app, false, |e| {
         Ok(serde_json::to_value(e.candidates(now()))?)
     })
     .await
 }
-async fn policy_get(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn policy_get(HttpState(app): HttpState<App>) -> ApiResult {
     operation(app, false, |e| Ok(serde_json::to_value(e.policy())?)).await
 }
-async fn policy_put(
-    HttpState(app): HttpState<App>,
-    headers: HeaderMap,
-    Json(policy): Json<Policy>,
-) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn policy_put(HttpState(app): HttpState<App>, Json(policy): Json<Policy>) -> ApiResult {
     operation(app, true, move |e| {
         e.set_policy(policy)?;
         Ok(json!({"ok":true}))
     })
     .await
 }
-async fn blocks(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn blocks(HttpState(app): HttpState<App>) -> ApiResult {
     operation(app, false, |e| {
         Ok(serde_json::to_value(e.snapshot(now()).blocks)?)
     })
     .await
 }
-async fn block_add(
-    HttpState(app): HttpState<App>,
-    headers: HeaderMap,
-    Json(block): Json<Block>,
-) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn block_add(HttpState(app): HttpState<App>, Json(block): Json<Block>) -> ApiResult {
     operation(app, true, move |e| {
         e.add_block(block, now())?;
         Ok(json!({"ok":true}))
@@ -246,12 +294,7 @@ async fn block_add(
 struct Network {
     network: String,
 }
-async fn block_delete(
-    HttpState(app): HttpState<App>,
-    headers: HeaderMap,
-    Json(input): Json<Network>,
-) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn block_delete(HttpState(app): HttpState<App>, Json(input): Json<Network>) -> ApiResult {
     operation(app, true, move |e| {
         Ok(json!({"removed":e.remove_block(&input.network)?}))
     })
@@ -261,27 +304,147 @@ async fn block_delete(
 struct Approval {
     ip: String,
 }
-async fn approve(
-    HttpState(app): HttpState<App>,
-    headers: HeaderMap,
-    Json(input): Json<Approval>,
-) -> ApiResult {
-    authorize(&headers, &app.admin)?;
+async fn approve(HttpState(app): HttpState<App>, Json(input): Json<Approval>) -> ApiResult {
     operation(app, true, move |e| {
         Ok(serde_json::to_value(e.approve(&input.ip, now())?)?)
     })
     .await
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LookupRequest {
+    ip: std::net::IpAddr,
+}
+async fn lookup(HttpState(app): HttpState<App>, Json(input): Json<LookupRequest>) -> ApiResult {
+    let geo = app.geo.load_full();
+    operation(app, false, move |engine| {
+        let ip = input.ip.to_string();
+        let inspection = engine.inspect_ip(&ip, now(), geo.context(input.ip))?;
+        Ok(json!({"ip":ip,"geoip":geo.lookup(input.ip),"inspection":inspection}))
+    })
+    .await
+}
+async fn network_inspect(HttpState(app): HttpState<App>, Json(input): Json<Network>) -> ApiResult {
+    operation(app, false, move |engine| {
+        Ok(serde_json::to_value(
+            engine.inspect_network(&input.network, now())?,
+        )?)
+    })
+    .await
+}
+async fn geo_reload(HttpState(app): HttpState<App>) -> ApiResult {
+    let _permit = app
+        .geo_reload
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| error(StatusCode::CONFLICT, "GeoIP reload already running"))?;
+    let paths = app.geo_paths.clone();
+    let catalog = tokio::task::spawn_blocking(move || geoip::GeoCatalog::load(&paths))
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "GeoIP worker failed"))?
+        .map_err(|e| error(StatusCode::BAD_REQUEST, e))?;
+    let status = catalog.status();
+    app.geo.store(Arc::new(catalog));
+    Ok(Json(json!({"geoip":status})))
+}
+async fn rules_get(HttpState(app): HttpState<App>) -> ApiResult {
+    operation(app, false, |e| Ok(serde_json::to_value(e.rules())?)).await
+}
+async fn rules_put(
+    HttpState(app): HttpState<App>,
+    Json(rules): Json<guard_core::RuleSet>,
+) -> ApiResult {
+    operation(app, true, move |e| {
+        e.set_rules(rules)?;
+        Ok(serde_json::to_value(e.rules())?)
+    })
+    .await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LuaRequest {
+    script: String,
+}
+async fn compile_script(
+    app: &App,
+    script: String,
+) -> Result<guard_core::RuleSet, (StatusCode, Json<Value>)> {
+    let permit = app
+        .workers
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| error(StatusCode::SERVICE_UNAVAILABLE, "worker capacity reached"))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        lua_rules::compile_lua(&script)
+    })
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rule worker failed"))?
+    .map_err(|e| error(StatusCode::BAD_REQUEST, e))
+}
+async fn rules_lua(HttpState(app): HttpState<App>, Json(input): Json<LuaRequest>) -> ApiResult {
+    let rules = compile_script(&app, input.script).await?;
+    operation(app, true, move |e| {
+        e.set_rules(rules)?;
+        Ok(serde_json::to_value(e.rules())?)
+    })
+    .await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleValidation {
+    rules: Option<guard_core::RuleSet>,
+    script: Option<String>,
+}
+async fn rules_validate(
+    HttpState(app): HttpState<App>,
+    Json(input): Json<RuleValidation>,
+) -> ApiResult {
+    let rules = match (input.rules, input.script) {
+        (Some(mut rules), None) => {
+            rules
+                .validate()
+                .map_err(|e| error(StatusCode::BAD_REQUEST, e))?;
+            rules
+        }
+        (None, Some(script)) => compile_script(&app, script).await?,
+        _ => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of rules or script",
+            ));
+        }
+    };
+    Ok(Json(json!({"valid":true,"rules":rules})))
+}
 fn router(app: App) -> Router {
     let credentials = app.clone();
-    let requests = Arc::new(tokio::sync::Semaphore::new(64));
+    let requests = Arc::new(tokio::sync::Semaphore::new(app.max_http_requests));
     Router::new()
         .route("/", get(|| async { Html(include_str!("dashboard.html")) }))
         .route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
-        .route("/v1/decision", post(decision))
+        .route(
+            "/v1/decision",
+            post(decision).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/v1/events", post(events))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/status", get(status))
+        .route(
+            "/v1/lookup",
+            post(lookup).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/v1/networks/inspect",
+            post(network_inspect).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route("/v1/geoip/reload", post(geo_reload))
+        .route("/v1/rules", get(rules_get).put(rules_put))
+        .route(
+            "/v1/rules/lua",
+            axum::routing::put(rules_lua).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route("/v1/rules/validate", post(rules_validate))
         .route("/v1/candidates", get(candidates))
         .route("/v1/policy", get(policy_get).put(policy_put))
         .route(
@@ -345,14 +508,22 @@ fn open_database(path: &std::path::Path) -> anyhow::Result<Connection> {
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS checkpoint(id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);")?;
     Ok(db)
 }
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(args.threads as usize)
+        .enable_all()
+        .build()?
+        .block_on(run(args))
+}
+async fn run(args: Args) -> anyhow::Result<()> {
     let collector = std::env::var("HANGANG_GUARD_COLLECTOR_TOKEN")?;
     let admin = std::env::var("HANGANG_GUARD_ADMIN_TOKEN")?;
     anyhow::ensure!(
-        collector.len() >= 16 && admin.len() >= 16 && collector != admin,
-        "tokens must be distinct and at least 16 bytes"
+        (16..=4096).contains(&collector.len())
+            && (16..=4096).contains(&admin.len())
+            && collector != admin,
+        "tokens must be distinct and 16..4096 bytes"
     );
     let mut db = open_database(&args.database)?;
     let saved = db.query_row("SELECT body FROM checkpoint WHERE id=1", [], |r| {
@@ -370,7 +541,17 @@ async fn main() -> anyhow::Result<()> {
         engine.set_asn_catalog(serde_json::from_slice(&std::fs::read(path)?)?)?;
     }
     persist_state(&mut db, &engine.state())?;
+    let geo_paths = geoip::GeoPaths {
+        country: args.geoip_database,
+        asn: args.geoip_asn_database,
+    };
+    let geo = geoip::GeoCatalog::load(&geo_paths)?;
     let app = App {
+        geo: Arc::new(arc_swap::ArcSwap::from_pointee(geo)),
+        geo_paths: Arc::new(geo_paths),
+        geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),
+        max_http_requests: args.max_http_requests as usize,
+        view: Arc::new(arc_swap::ArcSwap::from_pointee(engine.decision_view())),
         inner: Arc::new(Mutex::new(Inner { engine })),
         db: Arc::new(Mutex::new(db)),
         workers: Arc::new(tokio::sync::Semaphore::new(1024)),
@@ -378,6 +559,21 @@ async fn main() -> anyhow::Result<()> {
         admin: Arc::new(admin),
     };
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let binary_worker = if let Some(address) = args.decision_listen {
+        anyhow::ensure!(
+            address.ip().is_loopback(),
+            "binary decision listener must bind loopback"
+        );
+        let binary = tokio::net::TcpListener::bind(address).await?;
+        eprintln!("binary decisions listening on {}", binary.local_addr()?);
+        Some(tokio::spawn(protocol::serve(
+            binary,
+            app.clone(),
+            stop_rx.clone(),
+        )))
+    } else {
+        None
+    };
     let checkpoint_app = app.clone();
     let worker = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -387,11 +583,23 @@ async fn main() -> anyhow::Result<()> {
     });
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     eprintln!("hangang-guard listening on {}", listener.local_addr()?);
+    let shutdown_stop = stop_tx.clone();
+    let listener = listener.tap_io(|stream| {
+        if let Err(e) = stream.set_nodelay(true) {
+            eprintln!("HTTP TCP_NODELAY failed: {e}");
+        }
+    });
     let serving = axum::serve(listener, router(app.clone()))
-        .with_graceful_shutdown(shutdown())
+        .with_graceful_shutdown(async move {
+            shutdown().await;
+            let _ = shutdown_stop.send(true);
+        })
         .await;
     let _ = stop_tx.send(true);
     let _ = worker.await;
+    if let Some(worker) = binary_worker {
+        worker.await??;
+    }
     checkpoint(app).await?;
     serving?;
     Ok(())
@@ -433,11 +641,18 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
-    fn app() -> App {
+    pub(crate) fn app() -> App {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE checkpoint(id INTEGER PRIMARY KEY,body TEXT NOT NULL)")
             .unwrap();
         App {
+            geo: Arc::new(arc_swap::ArcSwap::from_pointee(geoip::GeoCatalog::default())),
+            geo_paths: Arc::new(geoip::GeoPaths::default()),
+            geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),
+            max_http_requests: 4096,
+            view: Arc::new(arc_swap::ArcSwap::from_pointee(
+                Engine::new(Policy::default()).unwrap().decision_view(),
+            )),
             inner: Arc::new(Mutex::new(Inner {
                 engine: Engine::new(Policy::default()).unwrap(),
             })),
@@ -567,6 +782,226 @@ mod tests {
             .unwrap();
         let mut restored = Engine::restore(serde_json::from_str(&body).unwrap()).unwrap();
         assert_eq!(restored.snapshot(time).blocks.len(), 1);
+    }
+    #[tokio::test]
+    async fn rules_geo_lookup_durability_and_snapshot_rejection() {
+        let a = app();
+        let paths = geoip::GeoPaths {
+            country: Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("fixtures/GeoIP2-Country-Test.mmdb"),
+            ),
+            asn: None,
+        };
+        a.geo
+            .store(Arc::new(geoip::GeoCatalog::load(&paths).unwrap()));
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/lookup",
+                "POST",
+                "collector-test-token",
+                json!({"ip":"81.2.69.160"})
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let rules = json!({"version":1,"rules":[{"id":"gb","priority":10,"countries":["gb"],"action":"deny","score":10},{"id":"network-watch","network":"192.0.2.0/24","action":"observe","score":7}]});
+        let (status, validated) = request(
+            a.clone(),
+            "/v1/rules/validate",
+            "POST",
+            "admin-test-token",
+            json!({"rules":rules}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(validated["rules"]["rules"][0]["countries"][0], "GB");
+        assert_eq!(a.inner.lock().unwrap().engine.rules().rules.len(), 0);
+        request(
+            a.clone(),
+            "/v1/policy",
+            "PUT",
+            "admin-test-token",
+            json!({"mode":"enforce"}),
+        )
+        .await;
+        assert_eq!(
+            request(a.clone(), "/v1/rules", "PUT", "admin-test-token", rules)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/snapshot",
+                "GET",
+                "collector-test-token",
+                json!(null)
+            )
+            .await
+            .0,
+            StatusCode::NOT_IMPLEMENTED
+        );
+        for kind in [None, Some("honeypot")] {
+            let mut input = json!({"source_id":"test","ip":"81.2.69.160"});
+            if let Some(kind) = kind {
+                input["kind"] = json!(kind);
+            }
+            let (_, decision) = request(
+                a.clone(),
+                "/v1/decision",
+                "POST",
+                "collector-test-token",
+                input,
+            )
+            .await;
+            assert_eq!(decision["action"], "deny");
+        }
+        let (_, unknown) = request(
+            a.clone(),
+            "/v1/decision",
+            "POST",
+            "collector-test-token",
+            json!({"source_id":"test","ip":"192.0.2.1"}),
+        )
+        .await;
+        assert_eq!(unknown["action"], "allow");
+        let (_, found) = request(
+            a.clone(),
+            "/v1/lookup",
+            "POST",
+            "admin-test-token",
+            json!({"ip":"81.2.69.160"}),
+        )
+        .await;
+        assert_eq!(found["geoip"]["country_code"], "GB");
+        assert_eq!(found["inspection"]["score"], 10);
+        assert_eq!(found["inspection"]["suspicion"], "blocked");
+        let (_, network) = request(
+            a.clone(),
+            "/v1/networks/inspect",
+            "POST",
+            "admin-test-token",
+            json!({"network":"192.0.2.31/24"}),
+        )
+        .await;
+        assert_eq!(network["network"], "192.0.2.0/24");
+        assert_eq!(network["static_rule_score"], 7);
+        let body: String =
+            a.db.lock()
+                .unwrap()
+                .query_row("SELECT body FROM checkpoint WHERE id=1", [], |r| r.get(0))
+                .unwrap();
+        let restored = Engine::restore(serde_json::from_str(&body).unwrap()).unwrap();
+        assert_eq!(restored.rules().rules.len(), 2);
+        let script = "return {version=1,rules={{id='lua-watch',network='192.0.2.0/24',action='observe',score=3}}}";
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/rules/lua",
+                "PUT",
+                "admin-test-token",
+                json!({"script":script})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            a.inner.lock().unwrap().engine.rules().rules[0].id,
+            "lua-watch"
+        );
+        assert_eq!(
+            request(
+                a,
+                "/v1/rules/validate",
+                "POST",
+                "admin-test-token",
+                json!({"rules":{"version":1,"rules":[]},"script":script})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    #[tokio::test]
+    async fn failed_geo_reload_preserves_last_good() {
+        let mut a = app();
+        let path = std::env::temp_dir().join(format!(
+            "guard-geo-test-{}-{}.mmdb",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/GeoIP2-Country-Test.mmdb"),
+            &path,
+        )
+        .unwrap();
+        a.geo_paths = Arc::new(geoip::GeoPaths {
+            country: Some(path.clone()),
+            asn: None,
+        });
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/geoip/reload",
+                "POST",
+                "admin-test-token",
+                json!(null)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        std::fs::write(&path, b"invalid").unwrap();
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/geoip/reload",
+                "POST",
+                "admin-test-token",
+                json!(null)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            a.geo.load().context("81.2.69.160".parse().unwrap()).country,
+            Some("GB")
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // Deliberately prove queries bypass both held locks.
+    async fn plain_decision_does_not_wait_for_engine_or_database() {
+        let a = app();
+        let held = a.clone();
+        let engine_lock = held.inner.lock().unwrap();
+        let database_lock = held.db.lock().unwrap();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            request(
+                a,
+                "/v1/decision",
+                "POST",
+                "collector-test-token",
+                json!({"source_id":"test","ip":"192.0.2.1"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["action"], "allow");
+        drop(engine_lock);
+        drop(database_lock);
     }
     #[tokio::test]
     async fn active_blocks_admin_only_and_headers() {

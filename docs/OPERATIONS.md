@@ -24,14 +24,16 @@
 - SQLite 정책 변경은 성공 응답 전에 트랜잭션으로 저장한다. 집계와 자동
   판단은5초 checkpoint 및 정상 종료 시 저장하므로 crash 때 최근 집계를 잃을
   수 있다. WAL/SHM을 고려해 SQLite backup API 또는 정지 상태에서 백업한다.
-- 관리자 정책 변경의 직렬화·복제·fsync가 질의를 일시 지연시킬 수 있다.
-  체크포인트는 메모리 잠금을 해제한 뒤 직렬화/fsync한다. 대규모 운영 전
+- 일반 질의는 불변 ArcSwap view를 읽으므로 관리자 fsync·집계 잠금을 기다리지
+  않는다. 새 정책은 durable commit 후 publish한다. 증거를 동반한 질의와
+  관리자 조회는 별도 직렬화 경로를 쓰며 대규모 운영 전
   실제 rule 수로 지연·메모리를 측정하고 타임아웃을 조정한다.
 
 ## 자원 제한
 Tracked IP 최대10,000, IP별 집계 bucket 최대64, block 최대100,000,
 정책 snapshot 보수적 JSON budget4,000,000바이트, HTTP body4MiB,
-배치256, 서버 요청 동시 수64, blocking 작업 상한1,024. 숫자 제한보다 byte budget이 먼저 적용될
+배치256, 서버 HTTP 요청 동시 수 기본4,096(설정 가능), binary 연결 최대256,
+blocking 작업 상한1,024. 숫자 제한보다 byte budget이 먼저 적용될
 수 있다. 시간창이64초보다 크면 bucket 경계의 부분 증거를 보수적으로 버린다.
 원시 요청 로그나 body/토큰은 저장하지 않는다.
 
@@ -48,3 +50,18 @@ Guard 정책을 observe로 바꾸면 다음 질의 또는 캐시 TTL 이내에 g
 해제된다. Guard 장애로 query fail-deny가 동작할 때는 guard 복구 또는 Hangang
 플래그 변경/재시작이 필요하다. Native 기능 전체 해제는 `--guard-url`을 제거한다.
 기존 Hangang zero-trust 인증과 방어 기능은 독립적으로 유지된다.
+
+## 최신 동적 룰·GeoIP 적용
+
+관리 화면의 IP/CIDR 위험 조회, JSON/Lua 규칙 탭과 GeoIP 탭을 사용한다.
+[룰·점수 의미](RULES.md)를 읽고 dry-run 검증 후 적용한다. Lua 원본은 현재
+브라우저 초안이며 서버는 검증·컴파일한 JSON RuleSet을 영속화한다. 원본 Lua
+스크립트는 별도로 버전 관리한다. 비활성·동작 설명과 cache TTL 영향을 확인한다.
+GeoIP는 구성한 로컬 MMDB를 verify 후 atomic reload하며 실패 시 last-good 유지.
+기존 Hangang GeoIP 기능과 별개로 guard도 Country/City/ASN을 처리한다.
+운영자가 country/ASN 룰을 설정하면 실제 remote decision에 반영된다.
+Dynamic RuleSet은 snapshot v1로 전송하지 않으므로 query mode를 사용한다.
+
+상태를 바꾸는 증거 질의의 처리량은 ordinary read-only 결정과 다르다. 신규
+자동 차단이 매우 빈번하면 불변 view 재생성 비용을 측정해야 한다. 정상질의
+목표100k QPS와 원시공격로그100k ingest/sec를 동일한 자원 예산으로 가정하지 않는다.

@@ -37,3 +37,15 @@ traffic. Test those workloads before selecting production capacity/timeouts.
 - Observe-only production rollout and realistic traffic/candidate memory profiling.
 - Remote TLS, sustained load, multi-instance credentials/audit history.
 - Online ASN refresh, attack-pattern feeds and LLM inspection are explicit TODOs.
+
+## Performance/rules/operator extension verification
+- Core20tests, service18tests, native14guard tests and70existing proxy regressions pass.
+- Rust format/strictClippy, release builds and credential scan pass.
+- Extended real-process E2E: native binary decisions, GeoIP City/reload last-good,
+  Lua dry-run/apply,IP risk,CIDR inspection,snapshot rejection,durable rules and
+  authority restart/reconnect.
+- Chromium browser regression:10k candidates/100k blocks test fixtures,≤100 DOM
+  rows,search/pagination,all administrator flows,risk/GeoIP/JSON/Lua,mobile layout,
+  unsaved draft preservation,XSS-safe rendering and malformed response feedback.
+- Final15transport workload cases:12current configurations above100kQPS, zero
+  errors/histogram overflow. See PERFORMANCE.md and raw JSON.

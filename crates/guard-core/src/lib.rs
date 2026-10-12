@@ -1,9 +1,15 @@
+pub mod rules;
+use rules::CompiledRules;
+pub use rules::{GeoContext, Rule, RuleAction, RuleSet, Suspicion};
+pub mod prefix;
 use anyhow::{Result, ensure};
 use ipnet::IpNet;
+use prefix::PrefixTrie;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     net::IpAddr,
+    sync::Arc,
 };
 
 pub const MAX_CANDIDATES: usize = 10_000;
@@ -148,6 +154,7 @@ impl Policy {
 pub struct Candidate {
     pub ip: String,
     pub score: u64,
+    pub suspicion: Suspicion,
     pub eligible: bool,
     pub events: u64,
     pub first_seen: u64,
@@ -166,6 +173,8 @@ pub struct State {
     pub blocks: Vec<Block>,
     pub aggregates: Vec<Aggregate>,
     pub stats: Stats,
+    #[serde(default)]
+    pub rules: RuleSet,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stats {
@@ -186,14 +195,16 @@ pub struct AsnPrefix {
 pub struct Engine {
     policy: Policy,
     revision: u64,
-    blocks: BTreeMap<String, Block>,
+    blocks: BTreeMap<String, Arc<Block>>,
     aggregates: BTreeMap<String, Aggregate>,
     stats: Stats,
-    asns: HashMap<IpNet, u32>,
-    allow_index: HashSet<IpNet>,
-    block_index: HashMap<IpNet, Block>,
+    asns: Arc<PrefixTrie<u32>>,
+    allow_index: PrefixTrie<()>,
+    block_index: PrefixTrie<Arc<Block>>,
     last_pruned: Option<u64>,
     snapshot_bytes: usize,
+    rules: RuleSet,
+    compiled_rules: Arc<CompiledRules>,
 }
 impl Engine {
     pub fn new(mut policy: Policy) -> Result<Self> {
@@ -202,11 +213,10 @@ impl Engine {
             snapshot_budget(&policy, std::iter::empty()) <= 4_000_000,
             "policy snapshot byte budget exceeded"
         );
-        let allow_index = policy
-            .allow
-            .iter()
-            .map(|s| canonical_network(s))
-            .collect::<Result<_>>()?;
+        let mut allow_index = PrefixTrie::default();
+        for n in &policy.allow {
+            allow_index.insert(canonical_network(n)?, ());
+        }
         let snapshot_bytes = snapshot_budget(&policy, std::iter::empty());
         Ok(Self {
             policy,
@@ -214,11 +224,13 @@ impl Engine {
             blocks: BTreeMap::new(),
             aggregates: BTreeMap::new(),
             stats: Stats::default(),
-            asns: HashMap::new(),
+            asns: Arc::new(PrefixTrie::default()),
             allow_index,
-            block_index: HashMap::new(),
+            block_index: PrefixTrie::default(),
             last_pruned: None,
             snapshot_bytes,
+            rules: RuleSet::default(),
+            compiled_rules: Arc::new(CompiledRules::default()),
         })
     }
     pub fn policy(&self) -> &Policy {
@@ -229,16 +241,15 @@ impl Engine {
     }
     pub fn set_policy(&mut self, mut policy: Policy) -> Result<()> {
         policy.validate()?;
-        let allow_index = policy
-            .allow
-            .iter()
-            .map(|s| canonical_network(s))
-            .collect::<Result<_>>()?;
+        let mut allow_index = PrefixTrie::default();
+        for n in &policy.allow {
+            allow_index.insert(canonical_network(n)?, ());
+        }
         ensure!(
-            snapshot_budget(&policy, self.blocks.values()) <= 4_000_000,
+            snapshot_budget(&policy, self.blocks.values().map(AsRef::as_ref)) <= 4_000_000,
             "snapshot byte budget exceeded"
         );
-        self.snapshot_bytes = snapshot_budget(&policy, self.blocks.values());
+        self.snapshot_bytes = snapshot_budget(&policy, self.blocks.values().map(AsRef::as_ref));
         self.allow_index = allow_index;
         self.policy = policy;
         self.aggregates.clear();
@@ -262,18 +273,17 @@ impl Engine {
         self.blocks.retain(|_, b| {
             if b.expires_at <= now {
                 self.snapshot_bytes = self.snapshot_bytes.saturating_sub(block_cost(b));
+                if let Ok(n) = canonical_network(&b.network) {
+                    self.block_index.remove(n);
+                }
                 false
             } else {
                 true
             }
         });
-        self.block_index.retain(|_, b| b.expires_at > now);
     }
     fn allowed(&self, ip: IpAddr) -> bool {
-        let max = if ip.is_ipv4() { 32 } else { 128 };
-        (0..=max).any(|prefix| {
-            IpNet::new(ip, prefix).is_ok_and(|n| self.allow_index.contains(&n.trunc()))
-        })
+        self.allow_index.longest(ip).is_some()
     }
     pub fn ingest(&mut self, batch: EventBatch, now: u64) -> Result<IngestResult> {
         ensure!(
@@ -366,7 +376,7 @@ impl Engine {
             valid_until: now.saturating_add(30),
             mode: self.policy.mode,
             allow: self.policy.allow.clone(),
-            blocks: self.blocks.values().cloned().collect(),
+            blocks: self.blocks.values().map(|b| b.as_ref().clone()).collect(),
         }
     }
     pub fn candidates(&mut self, now: u64) -> Vec<Candidate> {
@@ -378,19 +388,31 @@ impl Engine {
                 Candidate {
                     ip: a.ip.clone(),
                     score: a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.0)),
+                    suspicion: Suspicion::from_score(
+                        a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.0)),
+                        self.policy.threshold,
+                        ip.is_some_and(|ip| {
+                            query_rules(
+                                &self.allow_index,
+                                &self.block_index,
+                                &self.compiled_rules,
+                                &self.asns,
+                                self.revision,
+                                self.policy.mode,
+                                ip,
+                                now,
+                                GeoContext::default(),
+                            )
+                            .action
+                                == "deny"
+                        }),
+                    ),
                     eligible: a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.0))
                         >= self.policy.threshold,
                     events: a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.1)),
                     first_seen: a.buckets.first_key_value().map_or(now, |(t, _)| *t),
                     last_seen: a.buckets.last_key_value().map_or(now, |(t, _)| *t),
-                    asn: ip.and_then(|ip| {
-                        let max = if ip.is_ipv4() { 32 } else { 128 };
-                        (0..=max).rev().find_map(|prefix| {
-                            IpNet::new(ip, prefix)
-                                .ok()
-                                .and_then(|n| self.asns.get(&n.trunc()).copied())
-                        })
-                    }),
+                    asn: ip.and_then(|ip| self.asns.longest(ip).copied()),
                 }
             })
             .collect()
@@ -407,7 +429,7 @@ impl Engine {
             self.blocks.contains_key(&block.network) || self.blocks.len() < MAX_BLOCKS,
             "block capacity reached"
         );
-        let old_cost = self.blocks.get(&block.network).map_or(0, block_cost);
+        let old_cost = self.blocks.get(&block.network).map_or(0, |b| block_cost(b));
         ensure!(
             self.snapshot_bytes
                 .saturating_sub(old_cost)
@@ -419,6 +441,7 @@ impl Engine {
             .snapshot_bytes
             .saturating_sub(old_cost)
             .saturating_add(block_cost(&block));
+        let block = Arc::new(block);
         self.block_index
             .insert(canonical_network(&block.network)?, block.clone());
         self.blocks.insert(block.network.clone(), block);
@@ -427,7 +450,7 @@ impl Engine {
     }
     pub fn remove_block(&mut self, network: &str) -> Result<bool> {
         let n = canonical_network(network)?.to_string();
-        self.block_index.remove(&canonical_network(&n)?);
+        self.block_index.remove(canonical_network(&n)?);
         let old = self.blocks.remove(&n);
         if let Some(b) = &old {
             self.snapshot_bytes = self.snapshot_bytes.saturating_sub(block_cost(b));
@@ -464,7 +487,7 @@ impl Engine {
     }
     pub fn set_asn_catalog(&mut self, prefixes: Vec<AsnPrefix>) -> Result<()> {
         ensure!(prefixes.len() <= MAX_BLOCKS, "ASN catalog exceeds capacity");
-        let mut values = HashMap::with_capacity(prefixes.len());
+        let mut values = PrefixTrie::default();
         for p in prefixes {
             ensure!(p.asn > 0, "invalid ASN");
             let network = canonical_network(&p.network)?;
@@ -473,16 +496,18 @@ impl Engine {
                 "duplicate ASN prefix"
             );
         }
-        self.asns = values;
+        self.asns = Arc::new(values);
+        self.revision = self.revision.saturating_add(1);
         Ok(())
     }
     pub fn state(&self) -> State {
         State {
             policy: self.policy.clone(),
             revision: self.revision,
-            blocks: self.blocks.values().cloned().collect(),
+            blocks: self.blocks.values().map(|b| b.as_ref().clone()).collect(),
             aggregates: self.aggregates.values().cloned().collect(),
             stats: self.stats.clone(),
+            rules: self.rules.clone(),
         }
     }
     pub fn restore(state: State) -> Result<Self> {
@@ -493,9 +518,13 @@ impl Engine {
         let mut engine = Self::new(state.policy)?;
         engine.revision = state.revision;
         engine.stats = state.stats;
+        let revision = engine.revision;
+        engine.set_rules(state.rules)?;
+        engine.revision = revision;
         for mut b in state.blocks {
             b.network = canonical_network(&b.network)?.to_string();
             ensure!(b.reason.len() <= 128, "invalid reason");
+            let b = Arc::new(b);
             engine
                 .block_index
                 .insert(canonical_network(&b.network)?, b.clone());
@@ -513,10 +542,11 @@ impl Engine {
             );
         }
         ensure!(
-            snapshot_budget(&engine.policy, engine.blocks.values()) <= 4_000_000,
+            snapshot_budget(&engine.policy, engine.blocks.values().map(AsRef::as_ref)) <= 4_000_000,
             "state snapshot byte budget exceeded"
         );
-        engine.snapshot_bytes = snapshot_budget(&engine.policy, engine.blocks.values());
+        engine.snapshot_bytes =
+            snapshot_budget(&engine.policy, engine.blocks.values().map(AsRef::as_ref));
         Ok(engine)
     }
 }
@@ -526,8 +556,8 @@ fn exact(ip: IpAddr) -> String {
 
 /// Immutable bounded prefix lookup, with allow precedence and local expiration.
 pub struct PrefixIndex {
-    allow: HashSet<IpNet>,
-    blocks: HashMap<IpNet, u64>,
+    allow: PrefixTrie<()>,
+    blocks: PrefixTrie<u64>,
     mode: Mode,
     valid_until: u64,
 }
@@ -545,11 +575,14 @@ impl PrefixIndex {
             snapshot.allow.len() <= MAX_BLOCKS && snapshot.blocks.len() <= MAX_BLOCKS,
             "too many prefixes"
         );
-        let mut allow = HashSet::new();
+        let mut allow = PrefixTrie::default();
         for n in &snapshot.allow {
-            ensure!(allow.insert(canonical_network(n)?), "duplicate allow");
+            ensure!(
+                allow.insert(canonical_network(n)?, ()).is_none(),
+                "duplicate allow"
+            );
         }
-        let mut blocks = HashMap::new();
+        let mut blocks = PrefixTrie::default();
         for b in &snapshot.blocks {
             ensure!(b.reason.len() <= 128, "invalid reason");
             ensure!(
@@ -570,29 +603,11 @@ impl PrefixIndex {
         if self.mode != Mode::Enforce || now >= self.valid_until {
             return false;
         }
-        let ip = match ip {
-            IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
-            _ => ip,
-        };
-        let max = if ip.is_ipv4() { 32 } else { 128 };
-        for prefix in 0..=max {
-            if let Ok(n) = IpNet::new(ip, prefix)
-                && self.allow.contains(&n.trunc())
-            {
-                return false;
-            }
-        }
-        for prefix in 0..=max {
-            if let Ok(n) = IpNet::new(ip, prefix)
-                && self
-                    .blocks
-                    .get(&n.trunc())
-                    .is_some_and(|expiry| *expiry > now)
-            {
-                return true;
-            }
-        }
-        false
+        self.allow.longest(ip).is_none()
+            && self
+                .blocks
+                .longest_where(ip, |expiry| *expiry > now)
+                .is_some()
     }
 }
 
@@ -761,44 +776,119 @@ pub struct Decision {
     pub reason: Option<String>,
     pub ttl_ms: u64,
 }
+#[derive(Clone)]
+pub struct DecisionView {
+    pub revision: u64,
+    pub mode: Mode,
+    allow: PrefixTrie<()>,
+    blocks: PrefixTrie<Arc<Block>>,
+    rules: Arc<CompiledRules>,
+    asns: Arc<PrefixTrie<u32>>,
+}
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DecisionRef<'a> {
+    pub version: u32,
+    pub revision: u64,
+    pub action: &'static str,
+    pub mode: Mode,
+    pub reason: Option<&'a str>,
+    pub ttl_ms: u64,
+}
+impl DecisionView {
+    pub fn query_ip(&self, ip: IpAddr, now: u64) -> DecisionRef<'_> {
+        self.query_ip_context(ip, now, GeoContext::default())
+    }
+    pub fn requires_geo(&self) -> bool {
+        self.rules.requires_geo()
+    }
+    pub fn query_ip_context(&self, ip: IpAddr, now: u64, geo: GeoContext<'_>) -> DecisionRef<'_> {
+        query_rules(
+            &self.allow,
+            &self.blocks,
+            &self.rules,
+            &self.asns,
+            self.revision,
+            self.mode,
+            ip,
+            now,
+            geo,
+        )
+    }
+    pub fn decision(&self, ip: IpAddr, now: u64) -> DecisionRef<'_> {
+        self.query_ip(ip, now)
+    }
+    pub fn allocated_bytes(&self) -> usize {
+        self.allow.allocated_bytes() + self.blocks.allocated_bytes()
+    }
+}
+fn query_indices<'a>(
+    allow: &PrefixTrie<()>,
+    blocks: &'a PrefixTrie<Arc<Block>>,
+    revision: u64,
+    mode: Mode,
+    ip: IpAddr,
+    now: u64,
+) -> DecisionRef<'a> {
+    let mut d = DecisionRef {
+        version: 1,
+        revision,
+        action: "allow",
+        mode,
+        reason: None,
+        ttl_ms: 5000,
+    };
+    if mode == Mode::Enforce
+        && allow.longest(ip).is_none()
+        && let Some(b) = blocks.longest_where(ip, |b| b.expires_at > now)
+    {
+        d.action = "deny";
+        d.reason = Some(&b.reason);
+        d.ttl_ms = b
+            .expires_at
+            .saturating_sub(now)
+            .saturating_sub(1)
+            .saturating_mul(1000)
+            .min(5000);
+    }
+    d
+}
 impl Engine {
-    pub fn decision(&self, ip: &str, now: u64) -> Result<Decision> {
-        let ip = canonical_ip(ip)?;
-        let mut d = Decision {
-            version: 1,
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub fn decision_view(&self) -> DecisionView {
+        DecisionView {
             revision: self.revision,
-            action: "allow".into(),
             mode: self.policy.mode,
-            reason: None,
-            ttl_ms: 5000,
-        };
-        if self.policy.mode != Mode::Enforce {
-            return Ok(d);
+            allow: self.allow_index.clone(),
+            blocks: self.block_index.clone(),
+            rules: self.compiled_rules.clone(),
+            asns: self.asns.clone(),
         }
-        let max = if ip.is_ipv4() { 32 } else { 128 };
-        for prefix in 0..=max {
-            let n = IpNet::new(ip, prefix)?.trunc();
-            if self.allow_index.contains(&n) {
-                return Ok(d);
-            }
-        }
-        for prefix in (0..=max).rev() {
-            let n = IpNet::new(ip, prefix)?.trunc();
-            if let Some(b) = self.block_index.get(&n)
-                && b.expires_at > now
-            {
-                d.action = "deny".into();
-                d.reason = Some(b.reason.clone());
-                d.ttl_ms = b
-                    .expires_at
-                    .saturating_sub(now)
-                    .saturating_sub(1)
-                    .saturating_mul(1000)
-                    .min(5000);
-                return Ok(d);
-            }
-        }
-        Ok(d)
+    }
+    pub fn decision(&self, ip: &str, now: u64) -> Result<Decision> {
+        self.decision_context(ip, now, GeoContext::default())
+    }
+    pub fn decision_context(&self, ip: &str, now: u64, geo: GeoContext<'_>) -> Result<Decision> {
+        let d = query_rules(
+            &self.allow_index,
+            &self.block_index,
+            &self.compiled_rules,
+            &self.asns,
+            self.revision,
+            self.policy.mode,
+            canonical_ip(ip)?,
+            now,
+            geo,
+        );
+        Ok(Decision {
+            version: d.version,
+            revision: d.revision,
+            action: d.action.into(),
+            mode: d.mode,
+            reason: d.reason.map(str::to_owned),
+            ttl_ms: d.ttl_ms,
+        })
     }
 }
 
@@ -944,5 +1034,207 @@ mod asn_index_tests {
             c.iter().find(|c| c.ip == "192.0.2.42").unwrap().asn,
             Some(3)
         );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn query_rules<'a>(
+    allow: &PrefixTrie<()>,
+    blocks: &'a PrefixTrie<Arc<Block>>,
+    rules: &'a CompiledRules,
+    catalog: &PrefixTrie<u32>,
+    revision: u64,
+    mode: Mode,
+    ip: IpAddr,
+    now: u64,
+    geo: GeoContext<'_>,
+) -> DecisionRef<'a> {
+    if rules.rules.is_empty() {
+        return query_indices(allow, blocks, revision, mode, ip, now);
+    }
+    let mut d = DecisionRef {
+        version: 1,
+        revision,
+        action: "allow",
+        mode,
+        reason: None,
+        ttl_ms: 5000,
+    };
+    if mode != Mode::Enforce || allow.longest(ip).is_some() {
+        return d;
+    }
+    let geo = if geo.asn.is_none() && rules.requires_asn() {
+        GeoContext {
+            country: geo.country,
+            asn: catalog.longest(ip).copied(),
+        }
+    } else {
+        geo
+    };
+    let matched = rules.matching(ip, now, geo);
+    if let Some(rule) = matched.winner {
+        if let Some(e) = rule.expires_at {
+            d.ttl_ms = d
+                .ttl_ms
+                .min(e.saturating_sub(now).saturating_sub(1).saturating_mul(1000));
+        }
+        match rule.action {
+            RuleAction::Observe => {}
+            RuleAction::Allow => {
+                if let Some(e) = rule.expires_at {
+                    d.ttl_ms = d
+                        .ttl_ms
+                        .min(e.saturating_sub(now).saturating_sub(1).saturating_mul(1000));
+                }
+                return d;
+            }
+            RuleAction::Deny => {
+                d.action = "deny";
+                d.reason = Some(&rule.id);
+                if let Some(e) = rule.expires_at {
+                    d.ttl_ms = d
+                        .ttl_ms
+                        .min(e.saturating_sub(now).saturating_sub(1).saturating_mul(1000));
+                }
+                return d;
+            }
+        }
+    }
+    if let Some(block) = blocks.longest_where(ip, |b| b.expires_at > now) {
+        d.action = "deny";
+        d.reason = Some(&block.reason);
+        d.ttl_ms = d.ttl_ms.min(
+            block
+                .expires_at
+                .saturating_sub(now)
+                .saturating_sub(1)
+                .saturating_mul(1000),
+        );
+    }
+    d
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Inspection {
+    pub ip: String,
+    pub asn: Option<u32>,
+    pub score: u64,
+    pub signal_score: u64,
+    pub static_rule_score: u64,
+    pub suspicion: Suspicion,
+    pub matched_rules: Vec<String>,
+    pub decision: Decision,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkInspection {
+    pub network: String,
+    pub score: u64,
+    pub signal_score: u64,
+    pub static_rule_score: u64,
+    pub matched_rules: Vec<String>,
+    pub events: u64,
+    pub unique_ips: usize,
+    pub max_ip_score: u64,
+    pub suspicion: Suspicion,
+}
+impl Engine {
+    pub fn rules(&self) -> &RuleSet {
+        &self.rules
+    }
+    pub fn set_rules(&mut self, mut rules: RuleSet) -> Result<()> {
+        rules.validate()?;
+        let compiled = CompiledRules::new(&rules)?;
+        self.rules = rules;
+        self.compiled_rules = Arc::new(compiled);
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
+    pub fn inspect_ip(&mut self, ip: &str, now: u64, geo: GeoContext<'_>) -> Result<Inspection> {
+        self.prune(now);
+        let ip = canonical_ip(ip)?;
+        let key = ip.to_string();
+        let signal_score = self.aggregates.get(&key).map_or(0, |a| {
+            a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.0))
+        });
+        let geo = GeoContext {
+            country: geo.country,
+            asn: geo.asn.or_else(|| self.asns.longest(ip).copied()),
+        };
+        let matches = self.compiled_rules.matching(ip, now, geo);
+        let score = signal_score.saturating_add(matches.score);
+        let d = query_rules(
+            &self.allow_index,
+            &self.block_index,
+            &self.compiled_rules,
+            &self.asns,
+            self.revision,
+            self.policy.mode,
+            ip,
+            now,
+            geo,
+        );
+        Ok(Inspection {
+            ip: key,
+            asn: geo.asn,
+            score,
+            signal_score,
+            static_rule_score: matches.score,
+            suspicion: Suspicion::from_score(score, self.policy.threshold, d.action == "deny"),
+            matched_rules: self.compiled_rules.matching_ids(&matches),
+            decision: Decision {
+                version: d.version,
+                revision: d.revision,
+                action: d.action.into(),
+                mode: d.mode,
+                reason: d.reason.map(str::to_owned),
+                ttl_ms: d.ttl_ms,
+            },
+        })
+    }
+    pub fn inspect_network(&mut self, network: &str, now: u64) -> Result<NetworkInspection> {
+        self.prune(now);
+        let network = canonical_network(network)?;
+        let mut result = NetworkInspection {
+            network: network.to_string(),
+            score: 0,
+            signal_score: 0,
+            static_rule_score: 0,
+            matched_rules: vec![],
+            events: 0,
+            unique_ips: 0,
+            max_ip_score: 0,
+            suspicion: Suspicion::Normal,
+        };
+        for a in self.aggregates.values() {
+            if canonical_ip(&a.ip).is_ok_and(|ip| network.contains(&ip)) {
+                let score = a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.0));
+                result.score = result.score.saturating_add(score);
+                result.events = result
+                    .events
+                    .saturating_add(a.buckets.values().fold(0u64, |s, b| s.saturating_add(b.1)));
+                result.unique_ips += 1;
+                result.max_ip_score = result.max_ip_score.max(score);
+            }
+        }
+        result.signal_score = result.score;
+        for r in &self.compiled_rules.rules {
+            if !r.countries.is_empty()
+                || !r.asns.is_empty()
+                || r.expires_at.is_some_and(|e| e <= now)
+            {
+                continue;
+            }
+            if let Some(n) = &r.network
+                && let Ok(n) = canonical_network(n)
+                && n.prefix_len() <= network.prefix_len()
+                && n.contains(&network.addr())
+            {
+                result.static_rule_score = result.static_rule_score.saturating_add(r.score as u64);
+                result.matched_rules.push(r.id.clone());
+            }
+        }
+        result.score = result.signal_score.saturating_add(result.static_rule_score);
+        result.suspicion = Suspicion::from_score(result.score, self.policy.threshold, false);
+        Ok(result)
     }
 }

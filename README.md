@@ -59,6 +59,26 @@ IP는 Hangang이 신뢰 프록시 경계에서 판별합니다. 임의의 X-Forw
 그대로 믿지 않습니다. Guard 차단 요청은 증거를 갱신하지 않습니다. 허용
 목록은 guard 차단만 면제하고 다른 인증·보안 정책을 면제하지 않습니다.
 
+## 성능·GeoIP·동적 룰
+
+IP/CIDR/ASN pool은 압축 radix tree로 조회합니다. 일반 질의는 불변 정책을
+잠금 없이 읽고 SQLite·집계 잠금·blocking worker를 거치지 않습니다. 선택적
+바이너리 TCP 연동은 연결당 한 번 인증하고 24바이트 프레임을 사용합니다.
+
+```sh
+hangang-guard --decision-listen 127.0.0.1:9081 \
+  --geoip-database /path/country-or-city.mmdb \
+  --geoip-asn-database /path/asn.mmdb
+hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081
+```
+
+관리 화면에서 IP/CIDR 조회, GeoIP·ASN, 점수·의심 단계, 허용 목록, 정책과
+JSON/Lua 룰을 관리합니다. Lua는 서비스에 내장되며 룰 적용 시 검증·컴파일하고,
+요청마다 실행하지 않습니다. 룰 검증은 활성화와 분리되어 있습니다.
+
+[룰·점수·GeoIP](docs/RULES.md), [바이너리 프로토콜](docs/PROTOCOL.md),
+[도구 조사](docs/TOOL_RESEARCH.md), [성능 검증](docs/PERFORMANCE.md)을 참고하세요.
+
 ## 검증
 
 ```sh
@@ -76,9 +96,10 @@ E2E는 임시 DB·별도 포트·임시 토큰으로 실제 프로세스를 실�
 
 지원: 요청별 질의, 짧은 선택적 캐시, IPv4/IPv6 CIDR, 가중치 기반 제한된
 시간창 집계, 수동 후보 승인·차단 해제, 정책 변경, SQLite 복구, 오프라인
-ASN prefix catalog, 대시보드, Hangang 네이티브 연동.
+ASN prefix catalog·GeoIP MMDB, IP/CIDR risk 조회, 내장 Lua/JSON 동적 룰,
+관리자 대시보드, Hangang 네이티브 HTTP/TCP 연동.
 
 ASN 정보는 분류를 위한 보조 자료입니다. ASN 전체 차단은 자동화하지 않습니다.
 온라인 ASN 풀 갱신, 서명된 공격 패턴 피드, ASN 차단 제안의 영향 분석,
-GeoIP 역할 변경, LLM 검토 보조는 다음 단계입니다. 운영 적용 순서와 한계는
+GeoIP 온라인 갱신·세부 운영 정책, LLM 검토 보조는 다음 단계입니다. 운영 적용 순서와 한계는
 [운영 문서](docs/OPERATIONS.md), 작업 절차는 [설계](docs/DESIGN.md)에 있습니다.

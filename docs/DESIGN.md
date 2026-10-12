@@ -151,3 +151,36 @@ untrusted request/prompt-injection isolation, provider/prompt versioning, timeou
 and outage behavior, deterministic policy gates, shadow evaluation and operator
 review. This is a design backlog item, not an implemented runtime dependency.
 The detailed checklist is recorded in TODO.md.
+
+## Performance phase — IP pools, operator UI and protocol
+User requirement: design and qualify 10,000–100,000 decisions/second, including
+protocol-level optimization when necessary. The earlier Python sample is not
+sufficient qualification. Use compact radix indexes for IPv4/IPv6 allow, block
+and ASN pools. Publish immutable decision views atomically; ordinary decisions
+must avoid the engine mutex, SQLite, spawn_blocking, string IP parsing and generic
+JSON intermediate values. Evidence ingestion and durable administration retain
+a separate serialized control path. Query remains default, optional cache 1–5s.
+
+Add an optional loopback-only authenticated persistent binary decision listener
+with fixed-size frames and bounded connections/idle deadlines; HTTP remains for
+API, evidence, remote secured access and management. Native Hangang should be able
+to select this transport without changing evidence or failure semantics.
+
+Qualification uses release builds, a Rust multi-connection load generator,
+explicit concurrency/pipeline sizes, empty/enforce and large IPv4/IPv6 pools,
+match/miss mixes, latencies, errors, CPU/RSS and sustained runs. Distinguish isolated
+index throughput, decision-service transport throughput and full native proxy
+throughput. Publish measured results and limits, never infer a production SLA.
+Operator UI gets structured policy editing, separate allow/block/candidate views,
+search/sort/pagination, expiration and clear errors; it must handle thousands of
+entries without creating thousands of DOM nodes or replacing unsaved inputs.
+
+## Current GeoIP/rules extension
+The initial GeoIP deferral above is superseded by operator-provided offline MMDB
+support in guard. Country/City/ASN lookup, IP/CIDR scores and suspicion stages,
+compiled JSON/Lua rules, dry-run validation and durable atomic policy publication
+are now implemented. See RULES.md for exact precedence/limits and TOOL_RESEARCH.md
+for the primary-source comparison. Scripts compile on administration, never per
+query. Policy default remains observe and every-query remote admission remains
+default; rules requiring GeoIP use local immutable readers. Snapshot v1 rejects
+nonempty dynamic rules instead of publishing an incomplete policy.

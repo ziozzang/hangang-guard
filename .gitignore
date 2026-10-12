@@ -1,3 +1,6 @@
 /target/
 *.sqlite*
 .env
+
+__pycache__/
+*.pyc
