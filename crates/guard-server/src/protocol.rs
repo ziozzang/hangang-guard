@@ -276,7 +276,7 @@ mod tests {
         let mut ack = [0; 4];
         stream.read_exact(&mut ack).await.unwrap();
         let mut requests = vec![0u8; 24 * 300];
-        for (id, frame) in requests.chunks_exact_mut(24).enumerate() {
+        for (id, frame) in requests.as_chunks_mut::<24>().0.iter_mut().enumerate() {
             frame[0] = 1;
             frame[1] = 4;
             frame[4..8].copy_from_slice(&(id as u32).to_be_bytes());
@@ -289,7 +289,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        for (id, frame) in responses.chunks_exact(24).enumerate() {
+        for (id, frame) in responses.as_chunks::<24>().0.iter().enumerate() {
             assert_eq!(
                 u32::from_be_bytes(frame[4..8].try_into().unwrap()),
                 id as u32

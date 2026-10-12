@@ -193,7 +193,7 @@ async fn start(
     let result = tokio::time::timeout(Duration::from_secs(15), async {
         let mut byte = [0u8];
         tokio::select! {
-            result = ready.read_exact(&mut byte) => { result?; ensure!(byte == [b'R'], "invalid worker readiness"); Ok(()) },
+            result = ready.read_exact(&mut byte) => { result?; ensure!(byte == *b"R", "invalid worker readiness"); Ok(()) },
             result = child.wait() => { let _ = result?; bail!("worker exited before readiness") }
         }
     }).await;
