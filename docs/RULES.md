@@ -1,5 +1,7 @@
 # Dynamic rules, scoring and GeoIP
 
+[한국어](ko/RULES.md) · [Documentation index](README.md)
+
 JSON and embedded Lua both compile into one typed, persisted RuleSet. An admin
 can validate without activation, then atomically apply while queries continue
 reading the last committed immutable policy view. Lua only executes on rule
@@ -20,12 +22,12 @@ configuration, never per-request. Existing Hangang auth still follows guard allo
 ```
 
 Rule optional fields: `network`, `countries`, `asns`, `expires_at` (Unix seconds),
-`description`, `priority` (default0), `score` (default0). At least one condition
+`description`, `priority` (default 0), `score` (default 0). At least one condition
 must exist. Conditions across fields are AND; country/ASN lists are OR within
 that field. Missing GeoIP does not match a rule requiring that metadata.
-Maximum256rules, unique ASCII ids≤64bytes, description≤256bytes, score≤1,000,000,
-country/ASN list≤256each. Countries normalize to uppercase; networks normalize to
-canonical CIDR. Rules are indexed via compressed CIDR trie and fixed256bit masks.
+Maximum 256 rules, unique ASCII ids ≤ 64 bytes, description ≤ 256 bytes, score ≤ 1,000,000,
+country/ASN list ≤ 256 each. Countries normalize to uppercase; networks normalize to
+canonical CIDR. Rules are indexed via compressed CIDR trie and fixed 256 bit masks.
 
 Guard allowlist always wins. In enforce mode highest priority matching rule wins,
 with equal priorities ordered by id ascending. `allow` permits guard admission,
@@ -53,7 +55,7 @@ end
 return { version = 1, rules = rules }
 ```
 
-Script≤32KiB, Lua memory≤4MiB, approximately100,000instruction budget and50ms hook
+Script ≤ 32 KiB, Lua memory ≤ 4 MiB, approximately 100,000 instruction budget and a 50 ms hook
 budget. Only text chunks and selected string/math/table/UTF8 libraries are
 available. No `os`, `io`, `package`, `debug`, `require`, dynamic chunk loading,
 filesystem, network or process API. The Lua hook is an execution budget, not an OS
@@ -66,11 +68,11 @@ API (admin token):
   returns `{valid: true, rules: RuleSet}` without modifying policy.
 - `PUT /v1/rules/lua` with `{script: ...}` compiles and durably applies.
 
-Snapshots v1 do not carry dynamic rules. `/v1/snapshot` returns501 when rules are
+Snapshots v1 do not carry dynamic rules. `/v1/snapshot` returns 501 when rules are
 nonempty to prevent a silently incomplete policy. Use HTTP or binary query mode
 for dynamic rules. A previously running snapshot client retains its old snapshot
 until expiry then fails open: do not mix snapshot rollout with dynamic rule
-activation. Decision caches may remain stale for their explicit1–5s TTL, including
+activation. Decision caches may remain stale for their explicit 1–5 s TTL, including
 GeoIP reload. Zero cache obtains the current published policy on every query.
 
 ## IP and CIDR scores
@@ -79,7 +81,7 @@ GeoIP reload. Zero cache obtains the current published policy on every query.
 signal score, static rule score, matched rule ids and suspicion.
 
 Stages: `normal`=0; `watch`=positive but below policy threshold; `suspicious`=at
-least threshold but below3×threshold; `high`=at least3×threshold; `blocked`=current
+least threshold but below 3×threshold; `high`=at least 3×threshold; `blocked`=current
 policy denies. Stages describe current evidence, not the probability of an attack.
 Signal scores decay with the bounded window; no raw request logs are retained.
 
@@ -93,8 +95,8 @@ CIDR or ASN-wide blocking. Review both aggregate size and per-IP values.
 
 Configure local immutable databases with `--geoip-database` (Country/City,
 including DBIP-Country-Lite) and `--geoip-asn-database` (GeoIP2/GeoLite2-ASN). Each
-file≤128MiB, verified MMDB structure/type, regular opened file and bounded reads.
-Future build timestamps beyond5min are rejected. Missing/malformed records return
+file ≤ 128 MiB, verified MMDB structure/type, regular opened file and bounded reads.
+Future build timestamps beyond 5 min are rejected. Missing/malformed records return
 unknown fields. Metadata reports type/build epoch/size, never private file paths.
 
 `POST /v1/geoip/reload` reloads only startup-configured paths atomically; a failure

@@ -22,6 +22,12 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+guard-update = { path = "../guard-update" }
+libc = "0.2"
+semver = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tempfile = "3"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

@@ -1,8 +1,10 @@
 # Decision performance qualification — 2026-10-12
 
+[한국어](ko/PERFORMANCE.md) · [Documentation index](README.md)
+
 Measured on AMD Ryzen 7 8745HS w/ Radeon 780M Graphics (16 logical CPUs), release builds,
-loopback, Rust load client8threads, current guard8threads. Each case warms up2s
-then measures10s. Other services share the host. All current cases exceed100,000
+loopback, Rust load client 8 threads, current guard 8 threads. Each case warms up 2 s
+then measures 10 s. Other services share the host. All current cases exceed 100,000
 decisions/sec with zero failed workers and zero latency histogram overflow.
 
 | Case | Connections / pipeline | QPS | p99 upper ms | RSS MiB | Server CPU cores |
@@ -25,27 +27,27 @@ decisions/sec with zero failed workers and zero latency histogram overflow.
 
 ## What was tested
 
-Pool cases use20,000 exact IPv4/IPv6 host prefixes, enforce mode,65,536 cycled
-IPs and approximately30.5% denied responses. Other IPs miss the block pool. No
+Pool cases use 20,000 exact IPv4/IPv6 host prefixes, enforce mode, 65,536 cycled
+IPs and approximately 30.5% denied responses. Other IPs miss the block pool. No
 decision cache is enabled. Prefix microbench also covers random mixed /24 and /48
-networks with100,000prefixes and50%hits; it is separate from transport measurements.
+networks with 100,000 prefixes and 50% hits; it is separate from transport measurements.
 
-GeoIP cases load the existing8,348,509byte DBIP-Country-Lite offline database and
-apply two country rules in enforce mode over65,536 varied8.8.x.x addresses. This
+GeoIP cases load the existing 8,348,509 byte DBIP-Country-Lite offline database and
+apply two country rules in enforce mode over 65,536 varied 8.8.x.x addresses. This
 tests live local decoding/rule dispatch, not an online GeoIP provider. All ordinary
 decisions use immutable read views; none issue DB queries or execute Lua.
 
-Baseline is commit81645cf (previous release), using16default runtime threads,
+Baseline is commit 81645cf (previous release), using 16 default runtime threads,
 HashMap prefix probing, global engine mutex and per-query blocking dispatch.
 Current changes also remove duplicate auth/JSON intermediate allocations and use
-8runtime threads; baseline comparisons measure the whole architecture change,
-not only the tree. Equal32connection/one-query cases are provided for comparison.
+8 runtime threads; baseline comparisons measure the whole architecture change,
+not only the tree. Equal 32 connection/one-query cases are provided for comparison.
 
-The first HTTP pipeline sample exposed40ms Nagle/delayed-ACK waits (~45kQPS).
+The first HTTP pipeline sample exposed 40 ms Nagle/delayed-ACK waits (~45 kQPS).
 Enabling TCP_NODELAY on accepted HTTP sockets removed that transport bottleneck.
-Final pipeline case reaches~492kQPS; queueing2048in-flight requests naturally
+Final pipeline case reaches ~492 kQPS; queueing 2048 in-flight requests naturally
 raises p99 relative to one-request-per-connection. Native TCP currently uses one
-outstanding query per pooled socket; its normal comparison is pipeline1, not the
+outstanding query per pooled socket; its normal comparison is pipeline 1, not the
 millions/sec pipelined standalone-client numbers.
 
 ## Reproduce
@@ -53,24 +55,24 @@ millions/sec pipelined standalone-client numbers.
 ```sh
 cargo build --release --workspace
 cargo run --release -p guard-core --example prefix_bench
-# Rebuild baseline in an isolated checkout at81645cf, or save its release binary.
+# Rebuild baseline in an isolated checkout at 81645cf, or save its release binary.
 python3 tools/qualify_performance.py --baseline-bin /path/baseline/hangang-guard \
   --geoip-database /path/country.mmdb
 ```
 
 [Raw results](performance-results.json) include counts, denial counts, CPU seconds,
-RSS and histograms resolution/cap metadata. Latency buckets have10µsresolution;
-samples≥100msare counted separately rather than hidden. The generator checks
+RSS and histograms resolution/cap metadata. Latency buckets have 10 µs resolution;
+samples ≥ 100 ms are counted separately rather than hidden. The generator checks
 HTTP status/typed decision, or binary correlation/action/frame validity.
 
 ## Limits
 
 This qualifies the decision service transport on this host. It does not establish
 full Hangang proxy/origin throughput, remote TLS/WAN capacity, long-duration
-production SLA, LLM per-request throughput or100kstate-changing evidence events/sec.
+production SLA, LLM per-request throughput or 100k state-changing evidence events/sec.
 CIDR catalogue used here is synthetic and densely arranged. Real prefix layouts,
 rule counts, MMDB providers, metadata hit/miss mixes, CPU pinning and durability
 traffic should be profiled on the deployment hardware. Evidence ingestion and
 frequent automatic block publication have different costs from read-only lookup.
-The100,000entry numeric cap is also subject to4,000,000byte policy budget; standalone
-100k-prefix microbench does not imply every100k-entry policy fits that budget.
+The 100,000 entry numeric cap is also subject to 4,000,000 byte policy budget; standalone
+100k-prefix microbench does not imply every 100k-entry policy fits that budget.

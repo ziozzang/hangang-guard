@@ -1,81 +1,80 @@
 # TODO
 
-현재 hangang (~/hangang)용  보안 플러그인 만드는게 목표.
-요청 로그를 분석해서 ㄷ음 조건에 따라 해당 IP등을 실시간 차단하거나 하는 것을 수행한다.
-hangang은 네이티브 zero-trust매커니즘을 이미 내장하고 있기 때문에. 충분히 가능할 것으로 보인다.
+[한국어](TODO.ko.md) · [Documentation](docs/README.md)
 
-# 예시 메커니즘
-1. 허니팟에서 기록하기.
-2. IP주소에서 ASN역 PULL하기.
-3. 임계값을 초과한건 블록후보(BCL)에 넣기.
-4. 블록할 ASN의 IP주소 풀을 가져오기
-5.  화이트리스트 결정하기(반자동으로 LLM으로?)
-6. 블록할 IP주소를 범위 결정하기.
+## Original requirements
 
-아마 내부적으로 hangang -> 실시간 zero-trust server 는 lua든 아니면 쿼리든 뭐든 가능할거고.
-- 이걸 대시보드로 관리 가능해야하고
-- 위의 정책을 동적으로 처리 가능하도록
-- 블럭 풀 등을 처리 가능한 초고속의 서버
-같은게 필요할거 같긴해.
+Build a security service for Hangang (`~/hangang`) that analyzes request signals
+and blocks IPs in real time according to policy. Hangang's native zero-trust
+mechanism should support first-class integration.
 
-필요하다면 geoip 같은것도 이쪽에 이관 가능할거 같기도 하거든?
+Example workflow:
 
-먼저 충분히 디자인하고 (필요하다면 astra는 비싸지만 아주 가끔. 꼭 필요할때만 호출) 하도록하고. 서브 에이전트를 통해서 구현하도록하자. 적당히 비용 생각해가면서.
-- 현재 구동중인 서버에 붙여서 테스트 해볼수 있을거야.
+1. Record explicit honeypot evidence.
+2. Resolve the source IP's ASN.
+3. Add IPs exceeding the threshold to the block candidate list (BCL).
+4. Retrieve the IP prefix pool associated with a proposed ASN block.
+5. Determine allowlists, possibly with reviewed LLM assistance.
+6. Decide the scope of IP ranges to block.
 
-비슷한 제품이 이미 있을거 같기도 한데.
-- 공격 패턴을 자동 수집을 한다던가. 특정 패턴을 잡아내면 이걸 허니팟IP등으로 (스캐닝하던놈) 들로 관리 가능할거 같긴 하거든.
-- 이런 패턴도 수집/업데이트가 된다면 그걸 써먹을수도 있을거 같긴 해.
+Requirements: per-request queries or an embedded policy mechanism, dashboard
+management, dynamic policies, extremely fast block-pool lookup, and consideration
+of GeoIP in guard. Design thoroughly before implementation; use sub-agents for
+independent implementation units and consider cost. Existing running servers may
+be used for testing when deployment conditions are established.
 
-# 코드는
-- rust로 하고. 리소스는 꽤 적게 차지 하도록. 데이터베이스는 항상 조회가 할건 아니고 커밋/캐시할때만. 로그를 모두 담으면 문제 됨.
+Research similar tools, attack-pattern collection and updateable pattern feeds.
+Implement in Rust with low resource use. Databases are for persistence/checkpoints,
+not every decision; do not retain all request logs. The original working name
+`hangang-flogging` was considered before choosing `hangang-guard`.
 
-# 기타
+## Accepted direction — 2026-10-12
 
-서버 이름은 뭐가 좋을까.
-hangang-flogging 같은거라고 할까?
+- Project: `hangang-guard`; retain workspace directory `hangang-safe`.
+- Rust service with native first-class Hangang support; modifying Hangang is authorized.
+- Hangang queries guard on every request by default. Cache is optional and strictly limited to a 1–5 second TTL.
+- Procedure: design/review → independent sub-agent implementation → real-process integration verification → commit/push. Protect existing Hangang edits with a separate worktree.
+- Initial implementation: observe/enforce policies, BCL and reviewed approval, CIDR allow/block/expiration, dashboard, bounded aggregation, SQLite checkpoints, per-request decisions and optional short cache.
+- Next phases: online ASN prefix refresh, ASN proposal impact analysis, authenticated attack-pattern updates with provenance/version/rollback, and GeoIP operational policy.
+- Guard is the IP/network policy and risk component of the zero-trust backbone.
+  Hopae manages users/principals. Guard must not duplicate accounts or sessions;
+  future scope expansion should preserve that responsibility boundary.
+- English is the primary documentation language; Korean translations accompany it.
 
+## Prompt-based request inspection and LLM queries
 
-# 확정된 방향 (2026-10-12)
-- 프로젝트 이름: hangang-guard. 현재 workspace 디렉터리 hangang-safe는 유지.
-- Rust로 구현하고 hangang에 네이티브 first-class 연동을 제공한다.
-- 기본은 hangang이 매 요청 guard에 질의하는 방식이다. 캐시는 선택 사항이며
-  활성화할 때 TTL은 1~5초로 극도로 짧게 제한한다.
-- 설계/검토 → 단위별 서브 에이전트 구현 → 실제 프로세스 통합 검증 →
-  커밋/푸시 순서로 진행한다. 기존 hangang 미커밋 작업은 별도 worktree로 보호한다.
-- 초기 구현: 관찰/차단 정책, BCL 후보 및 수동 승인, CIDR 허용/차단/만료,
-  대시보드, bounded 집계, SQLite checkpoint, 요청별 질의와 선택적 캐시.
-- 다음 단계: 온라인 ASN prefix pull/refresh, ASN 차단 후보 영향 분석,
-  서명/출처/버전/롤백을 갖춘 공격 패턴 수집·업데이트, GeoIP 역할 검토.
+User-requested investigation: inspect request patterns according to operator
+prompts and use LLM queries for analysis. Decide implementation after design.
 
-# TODO: 프롬프트 기반 요청 패턴 검사와 LLM 질의
-사용자 요청: 프롬프트에 따라 요청 패턴을 검사하고 LLM을 통해 질의/판단할 수
-있는 기능을 검토한다. 구현 방식은 충분히 설계한 뒤 결정한다.
+- [ ] Design prompt policies defining inspection goals, criteria and output schemas.
+- [ ] Compare synchronous per-request queries with asynchronous aggregate analysis:
+      latency, cost, throughput, failure behavior, and interaction between optional
+      1–5 second decision cache and policy changes.
+- [ ] Select minimum inputs: method/path structure, status/frequency/time patterns,
+      honeypot/scanner evidence. Decide header/body inclusion through explicit policy;
+      remove or mask tokens, cookies and personal data. Bound input and aggregate sizes.
+- [ ] Treat attacker-controlled request strings and prompt injection as untrusted
+      data, separate from system prompts, operator policy and tool permissions.
+      Validate structured output and retain decision provenance.
+- [ ] Design provider/model/prompt versioning, cost budgets, timeouts, concurrency,
+      circuit breakers, retries/deduplication and result expiration. Invalidate
+      relevant cache entries when prompt policies change.
+- [ ] First evaluate LLM results as candidates/explanations. Before automatic
+      enforcement, design deterministic policy gates, false-positive validation,
+      shadow evaluation and rollback. Do not grant allowlist mutation or ASN-wide
+      blocking authority without separate review.
+- [ ] Show prompt policies, results, rationale, cost, latency and approval status
+      in the dashboard. Build reproducible benign/attack evaluation datasets and criteria.
 
-- [ ] 운영자가 검사 목적·판단 기준·출력 스키마를 정의하는 프롬프트 정책 모델 설계.
-- [ ] 요청별 동기 질의와 집계 패턴의 비동기 분석을 비교: 지연, 비용, 처리량,
-      장애 시 동작, 선택적 1~5초 decision cache와 정책 갱신 관계를 측정.
-- [ ] HTTP method/path 구조, 상태·빈도·시간 분포, honeypot/scanner 증거 등
-      필요한 최소 입력 선정. 헤더/body 사용 여부는 별도 명시적 정책으로 결정하고
-      토큰·쿠키·개인정보는 전달 전에 제거/마스킹. 입력 길이·집계량 상한 설정.
-- [ ] 공격자가 보낸 요청 문자열의 prompt injection을 비신뢰 데이터로 처리하고
-      시스템 프롬프트/운영 정책/도구 권한과 분리. 구조화 출력 검증과 근거 추적.
-- [ ] 모델/제공자/프롬프트 버전, 비용 예산, timeout, concurrency, circuit breaker,
-      재시도/중복 제거와 결과 만료 설계. 프롬프트 변경 때 관련 cache를 무효화.
-- [ ] LLM 결과를 후보/보조 설명으로 사용하는 방식부터 평가하고, 자동 차단을
-      허용하는 경우 deterministic 정책 gate·오탐 검증·shadow 평가·롤백을 설계.
-      LLM의 whitelist 수정/ASN 광역 차단 권한은 별도 검토 없이는 부여하지 않는다.
-- [ ] 대시보드에 프롬프트 정책·질의 결과·근거·비용·지연·승인 상태를 표시하고
-      재현 가능한 정상/공격 패턴 평가셋과 품질 기준을 마련한다.
+## Performance, policy and management expansion — 2026-10-12
 
-# 성능·정책·관리 확장 (2026-10-12)
-- [x] 압축 radix tree 기반 IPv4/IPv6 IP pool 조회, immutable lock-free 판단.
-- [x] 초당10,000–100,000 질의 목표를 실제 통신 부하 테스트로 검증.
-- [x] 연결 재사용/1회 인증/고정24바이트 바이너리 프로토콜과 native 연동.
-- [x] 관리자 목록 검색·정렬·페이지네이션, 구조화 정책/화이트리스트 편집.
-- [x] 오프라인 GeoIP Country/City/ASN 처리·관리자 조회·last-good reload.
-- [x] IP/CIDR 점수·의심 단계·규칙 근거 조회.
-- [x] 유사 도구 조사와 기능 반영, Lua 임베딩/JSON 동적 RuleSet 검증·배포.
-- [ ] 전체 proxy/실제 운영 traffic에서 지속 부하·실패·분산 배포 qualification.
-- [ ] 프롬프트 기반 LLM 요청 패턴 분석은 앞의 TODO에 따라 별도 설계.
-- [x] 사용자 확인: 임베딩은 Lua 런타임 내장을 의미하며 Lua 5.4로 구현.
+- [x] Compressed radix-tree IPv4/IPv6 pools and immutable lock-free decision views.
+- [x] Qualify the 10,000–100,000 decisions/sec target with actual transport load tests.
+- [x] Connection reuse, once-per-connection authentication, fixed 24-byte binary protocol and native integration.
+- [x] Admin search/sort/pagination and structured policy/allowlist editing.
+- [x] Offline GeoIP Country/City/ASN, admin lookup and last-good reload.
+- [x] IP/CIDR scores, suspicion stages and matched rule explanations.
+- [x] Similar-tool research, embedded Lua and JSON RuleSet validation/application.
+- [ ] Sustained load, failures and distributed deployment qualification with full proxy/production traffic.
+- [ ] Design prompt-based LLM inspection using the checklist above.
+- [x] User confirmed that embedding means an embedded Lua runtime; implemented Lua 5.4.
