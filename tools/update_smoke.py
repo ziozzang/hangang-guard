@@ -82,7 +82,7 @@ class Origin(http.server.BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--guard-bin', default='target/debug/hangang-guard')
+    parser.add_argument('--guard-bin', default='target/debug/sumunjang')
     parser.add_argument('--signer-bin', default='target/debug/guard-release-sign')
     args = parser.parse_args()
     if not Path('/proc/self').exists():
@@ -100,7 +100,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='guard-update-smoke-') as temporary:
         root = Path(temporary)
         root.chmod(0o700)
-        runtime, installed = root / 'runtime', root / 'hangang-guard'
+        runtime, installed = root / 'runtime', root / 'sumunjang'
         shutil.copy2(guard, runtime)
         shutil.copy2(guard, installed)
         seed = root / 'seed'
@@ -180,14 +180,14 @@ def main():
                        'HUP child replacement')
             assert request(api, '/v1/decision', collector, {'source_id': 'smoke', 'ip': '192.0.2.1'})[1]['action'] == 'deny'
             # Signed future launchers wrap an owned runtime to exercise lifecycle, not cross-version schema migration.
-            good = f'#!/bin/sh\nif [ "$1" = --version ]; then echo "hangang-guard {future}"; exit 0; fi\nexec "{runtime}" "$@"\n'.encode()
+            good = f'#!/bin/sh\nif [ "$1" = --version ]; then echo "sumunjang {future}"; exit 0; fi\nexec "{runtime}" "$@"\n'.encode()
             publish(future, good)
             check_now()
             eventually(lambda: phase('active'), 'signed upgrade and readiness')
-            assert subprocess.check_output([installed, '--version'], text=True).strip() == 'hangang-guard ' + future
+            assert subprocess.check_output([installed, '--version'], text=True).strip() == 'sumunjang ' + future
             assert request(api, '/v1/policy', admin)[1]['allow'] == ['192.0.2.2/32']
             assert request(api, '/v1/decision', collector, {'source_id': 'smoke', 'ip': '192.0.2.1'})[1]['action'] == 'deny'
-            bad = f'#!/bin/sh\nif [ "$1" = --version ]; then echo "hangang-guard {broken}"; exit 0; fi\nfor arg in "$@"; do if [ "$arg" = --check ]; then exec "{runtime}" "$@"; fi; done\nexit 73\n'.encode()
+            bad = f'#!/bin/sh\nif [ "$1" = --version ]; then echo "sumunjang {broken}"; exit 0; fi\nfor arg in "$@"; do if [ "$arg" = --check ]; then exec "{runtime}" "$@"; fi; done\nexit 73\n'.encode()
             publish(broken, bad)
             check_now()
             eventually(lambda: phase('rolled_back'), 'candidate readiness failure rollback')

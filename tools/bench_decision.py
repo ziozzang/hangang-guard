@@ -16,7 +16,7 @@ import time
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--guard-bin', default='target/release/hangang-guard')
+    parser.add_argument('--guard-bin', default='target/release/sumunjang')
     parser.add_argument('--requests', type=int, default=2000)
     parser.add_argument('--clients', type=int, default=8)
     args = parser.parse_args()

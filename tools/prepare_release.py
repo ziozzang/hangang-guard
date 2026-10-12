@@ -17,7 +17,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-unknown-linux-gnu"
-COMMON_BINARIES = ("hangang-guard", "guard-release-sign")
+COMMON_BINARIES = ("sumunjang", "hangang-guard", "guard-release-sign")
 TARGETS = {
     "x86_64-unknown-linux-gnu": ("linux", "amd64", COMMON_BINARIES),
     "aarch64-unknown-linux-gnu": ("linux", "arm64", COMMON_BINARIES),
@@ -87,9 +87,13 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
     license_file = ROOT / "LICENSE"
     if not license_file.is_file():
         raise ValueError("LICENSE is missing")
-    reported = run([executables["hangang-guard"], "--version"])
-    if reported != f"hangang-guard {version}":
-        raise ValueError(f"guard version mismatch: expected hangang-guard {version}, got {reported!r}")
+    reported = run([executables["sumunjang"], "--version"])
+    if reported != f"sumunjang {version}":
+        raise ValueError(f"guard version mismatch: expected sumunjang {version}, got {reported!r}")
+
+    legacy_reported = run([executables["hangang-guard"], "--version"])
+    if legacy_reported != f"hangang-guard {version}":
+        raise ValueError("legacy executable version mismatch")
 
     signer = executables["guard-release-sign"]
     public_key = None
@@ -102,16 +106,16 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
             raise ValueError("signing seed does not match release-public-key.txt")
 
     output.mkdir(parents=True, exist_ok=True)
-    basename = f"hangang-guard-{target}"
+    basename = f"sumunjang-{target}"
     artifact = output / basename
-    shutil.copyfile(executables["hangang-guard"], artifact)
+    shutil.copyfile(executables["sumunjang"], artifact)
     artifact.chmod(0o755)
 
-    archive_path = output / f"hangang-guard-v{version}-{platform}-{architecture}.tar.gz"
+    archive_path = output / f"sumunjang-v{version}-{platform}-{architecture}.tar.gz"
     with archive_path.open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0, compresslevel=9) as compressed:
             with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
-                directory = f"hangang-guard-v{version}-{platform}-{architecture}"
+                directory = f"sumunjang-v{version}-{platform}-{architecture}"
                 for name, path in executables.items():
                     add_file(archive, path, f"{directory}/{name}", 0o755)
                 add_file(archive, license_file, f"{directory}/LICENSE", 0o644)
@@ -120,25 +124,25 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
                     for filename in ("manifest.json", "index.js", "panel.html", "style.css"):
                         add_file(archive, package / filename, f"{directory}/plugins/guard/{filename}", 0o644)
 
+    # Keep the legacy signed asset pair for already deployed update clients.
+    legacy = output / f"hangang-guard-{target}"
+    shutil.copyfile(executables["hangang-guard"], legacy)
+    legacy.chmod(0o755)
     if not unsigned:
-        payload = {
-            "version": version,
-            "target": target,
-            "artifact_url": f"https://github.com/ziozzang/hangang-guard/releases/download/v{version}/{basename}",
-            "size": artifact.stat().st_size,
-            "sha256": digest(artifact),
-        }
-        manifest = output / f"{basename}.manifest.json"
-        # The unsigned payload is temporary; the signing helper is the only seed reader.
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=output, prefix=".release-payload-", suffix=".json", delete=False
-        ) as temporary:
-            payload_path = Path(temporary.name)
-            json.dump(payload, temporary, separators=(",", ":"), ensure_ascii=True)
-        try:
-            run([signer, payload_path, seed, manifest])
-        finally:
-            payload_path.unlink(missing_ok=True)
+        for binary in (artifact, legacy):
+            payload = {
+                "version": version, "target": target,
+                "artifact_url": f"https://github.com/ziozzang/hangang-guard/releases/download/v{version}/{binary.name}",
+                "size": binary.stat().st_size, "sha256": digest(binary),
+            }
+            manifest = output / f"{binary.name}.manifest.json"
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output, prefix=".release-payload-", suffix=".json", delete=False) as temporary:
+                payload_path = Path(temporary.name)
+                json.dump(payload, temporary, separators=(",", ":"), ensure_ascii=True)
+            try:
+                run([signer, payload_path, seed, manifest])
+            finally:
+                payload_path.unlink(missing_ok=True)
         (output / "release-public-key.txt").write_text(public_key + "\n", encoding="ascii")
     assets = sorted(path for path in output.iterdir() if path.is_file() and path.name != "SHA256SUMS")
     (output / "SHA256SUMS").write_text(

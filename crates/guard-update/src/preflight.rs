@@ -12,7 +12,8 @@ pub async fn validate_candidate(
 ) -> Result<()> {
     let reported = bounded_probe(executable, &[OsString::from("--version")]).await?;
     ensure!(
-        reported.trim() == format!("hangang-guard {version}"),
+        (reported.trim() == format!("sumunjang {version}")
+            || reported.trim() == format!("hangang-guard {version}")),
         "candidate version differs from signed manifest"
     );
     let mut arguments = configuration_arguments.to_vec();

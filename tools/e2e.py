@@ -62,7 +62,7 @@ class Origin(http.server.BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--guard-bin', default='target/debug/hangang-guard')
+    parser.add_argument('--guard-bin', default='target/debug/sumunjang')
     parser.add_argument('--hangang-bin', default='../hangang-guard-integration/target/debug/hangang')
     args = parser.parse_args()
     guard_bin, hangang_bin = str(Path(args.guard_bin).resolve()), str(Path(args.hangang_bin).resolve())

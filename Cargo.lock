@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "guard-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "ipnet",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "guard-load"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "guard-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "guard-update"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

@@ -101,7 +101,7 @@ Provision the trusted public key in `HANGANG_GUARD_UPDATE_KEY` and the normal
 collector/admin tokens in the service environment. Start the installed service:
 
 ```sh
-hangang-guard --supervised --database /var/lib/hangang-guard/policy.sqlite3 \
+sumunjang --supervised --database /var/lib/hangang-guard/policy.sqlite3 \
   --listen 127.0.0.1:9080 --decision-listen 127.0.0.1:9081 \
   --update-github --update-key-env HANGANG_GUARD_UPDATE_KEY \
   --update-interval-seconds 300
@@ -179,3 +179,12 @@ temporary databases/listeners. It tests HUP restart, signature preflight, upgrad
 activation, retained policy, failed readiness rollback, tamper rejection and
 shutdown cancellation. Future-version launcher fixtures delegate to an owned
 runtime; they validate lifecycle mechanisms, not arbitrary schema migrations.
+
+## Executable transition in v0.3.2
+
+The primary executable and release assets use `sumunjang`. Archives include a
+`hangang-guard` compatibility executable. Both target-specific artifact pairs are
+signed; new clients prefer `sumunjang`, while older clients can continue updating
+through the legacy pair. Partial primary pairs fail closed. Version preflight
+accepts either exact executable name only after signature verification. Repository
+URLs, protocol magic and credential environment names remain compatible.

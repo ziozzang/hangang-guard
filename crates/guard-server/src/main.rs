@@ -24,7 +24,7 @@ use std::{
 
 #[derive(Parser)]
 #[command(
-    name = "hangang-guard",
+    name = env!("CARGO_BIN_NAME"),
     version,
     about = "Zero-trust IP/network decision authority"
 )]
@@ -705,7 +705,7 @@ fn main() -> anyhow::Result<()> {
     if args.about {
         println!(
             "{}",
-            json!({"name":"hangang-guard","version":env!("CARGO_PKG_VERSION"),"repository":"https://github.com/ziozzang/hangang-guard","role":"zero-trust IP/network decision authority","principal_management":"hopae","target":env!("GUARD_TARGET"),"supervised_updates":cfg!(target_os="linux")})
+            json!({"name":"sumunjang","version":env!("CARGO_PKG_VERSION"),"repository":"https://github.com/ziozzang/hangang-guard","role":"zero-trust IP/network decision authority","principal_management":"hopae","target":env!("GUARD_TARGET"),"supervised_updates":cfg!(target_os="linux")})
         );
         return Ok(());
     }
@@ -879,7 +879,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     } else {
         tokio::net::TcpListener::bind(&args.listen).await?
     };
-    eprintln!("hangang-guard listening on {}", listener.local_addr()?);
+    eprintln!("sumunjang listening on {}", listener.local_addr()?);
     let shutdown_stop = stop_tx.clone();
     let listener = listener.tap_io(|stream| {
         if let Err(e) = stream.set_nodelay(true) {

@@ -2,8 +2,9 @@
 
 [한국어](README.ko.md) · [Documentation](docs/README.md)
 
-Sumunjang is the component name of `hangang-guard`. Existing repository, binary,
-protocol and updater identifiers remain compatible. Pumgye owns service/user/IP
+Sumunjang is the component name of `hangang-guard`. The primary executable is `sumunjang`; a `hangang-guard` compatibility executable
+and signed legacy asset pair remain available for existing installations. Repository
+URLs, protocol magic and credential environment variables remain compatible. Pumgye owns service/user/IP
 authorization; Sumunjang supplies network admission and risk evidence.
 
 A Rust security decision service and one backbone component of Hangang's
@@ -27,7 +28,7 @@ Rust 1.96 or later is required.
 cargo build --release
 export HANGANG_GUARD_COLLECTOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export HANGANG_GUARD_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-./target/release/hangang-guard --listen 127.0.0.1:9080 --database ./guard.sqlite3
+./target/release/sumunjang --listen 127.0.0.1:9080 --database ./guard.sqlite3
 ```
 
 The tokens must differ and each contain at least 16 bytes. Persist the same
@@ -80,7 +81,7 @@ optional persistent binary TCP transport authenticates once per connection and
 uses 24-byte frames.
 
 ```sh
-hangang-guard --decision-listen 127.0.0.1:9081 \
+sumunjang --decision-listen 127.0.0.1:9081 \
   --geoip-database /path/country-or-city.mmdb \
   --geoip-asn-database /path/asn.mmdb
 hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081

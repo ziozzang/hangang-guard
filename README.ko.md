@@ -2,8 +2,8 @@
 
 [English](README.md)
 
-`hangang-guard`의 컴포넌트 이름은 수문장입니다. 기존 저장소·바이너리·프로토콜·
-자동업데이트 식별자 호환성을 유지합니다. 품계가 서비스/사용자/IP 권한을 관리하고
+`hangang-guard`의 컴포넌트 이름은 수문장입니다. 기본 실행 파일은 `sumunjang`이며 기존 설치를 위한 `hangang-guard` 호환 실행 파일과
+서명된 기존 자산도 제공합니다. 저장소 URL·프로토콜·자격 증명 환경변수는 유지합니다. 품계가 서비스/사용자/IP 권한을 관리하고
 수문장은 네트워크 접근·위험 근거를 제공합니다.
 
 제로트러스트 백본 구성 요소로 Hangang의 IP/네트워크 정책과 위험 판단을 담당하는 Rust 서비스입니다.
@@ -25,7 +25,7 @@ Rust 1.96 이상이 필요합니다.
 cargo build --release
 export HANGANG_GUARD_COLLECTOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export HANGANG_GUARD_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-./target/release/hangang-guard --listen 127.0.0.1:9080 --database ./guard.sqlite3
+./target/release/sumunjang --listen 127.0.0.1:9080 --database ./guard.sqlite3
 ```
 
 두 토큰은 서로 달라야 하며 각각 최소 16바이트입니다. 실제 배포에서는 같은
@@ -75,7 +75,7 @@ IP/CIDR/ASN pool은 압축 radix tree로 조회합니다. 일반 질의는 불�
 TCP 연동은 연결당 한 번 인증하고 24바이트 프레임을 사용합니다.
 
 ```sh
-hangang-guard --decision-listen 127.0.0.1:9081 \
+sumunjang --decision-listen 127.0.0.1:9081 \
   --geoip-database /path/country-or-city.mmdb \
   --geoip-asn-database /path/asn.mmdb
 hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081

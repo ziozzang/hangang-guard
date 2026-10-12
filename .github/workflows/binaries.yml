@@ -48,7 +48,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_TERM_COLOR: always
-      HANGANG_GUARD_BINARY: target/${{ matrix.target }}/release/hangang-guard
+      HANGANG_GUARD_BINARY: target/${{ matrix.target }}/release/sumunjang
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

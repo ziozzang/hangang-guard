@@ -74,7 +74,16 @@ impl Release {
                     .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
             "invalid release target"
         );
-        let binary = format!("hangang-guard-{target}");
+        let primary = format!("sumunjang-{target}");
+        // Prefer the new pair. A partial or malformed primary pair must fail validation.
+        let binary =
+            if self.assets.iter().any(|asset| {
+                asset.name == primary || asset.name == format!("{primary}.manifest.json")
+            }) {
+                primary
+            } else {
+                format!("hangang-guard-{target}")
+            };
         let manifest = format!("{binary}.manifest.json");
         let find = |name: &str, maximum: u64| -> Result<&Asset> {
             let matches: Vec<_> = self.assets.iter().filter(|a| a.name == name).collect();
@@ -221,6 +230,27 @@ pub(crate) fn asset_redirect_allowed(original: &Url, next: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primary_assets_are_preferred_without_downgrading_partial_pairs() {
+        let mut candidate = release();
+        let mut primary = release().assets;
+        for asset in &mut primary {
+            asset.name = asset.name.replace("hangang-guard-", "sumunjang-");
+            asset.browser_download_url = asset
+                .browser_download_url
+                .replace("/hangang-guard-x86", "/sumunjang-x86");
+        }
+        candidate.assets.extend(primary);
+        assert!(
+            candidate
+                .select("x86_64-unknown-linux-gnu")
+                .unwrap()
+                .artifact_url
+                .contains("/sumunjang-")
+        );
+        candidate.assets.pop();
+        assert!(candidate.select("x86_64-unknown-linux-gnu").is_err());
+    }
     fn release() -> Release {
         let binary = "hangang-guard-x86_64-unknown-linux-gnu";
         Release {
