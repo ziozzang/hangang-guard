@@ -19,3 +19,5 @@ TODO는 저장소 루트에 둡니다. Guard는 제로트러스트 백본의 IP/
 | 검증 기록 | [검증](VALIDATION.md) | [Validation](../VALIDATION.md) |
 | 서명 업데이트 | [업데이트](UPDATES.md) | [Updates](../UPDATES.md) |
 | 향후 작업 | [TODO](../../TODO.ko.md) | [TODO](../../TODO.md) |
+
+[Hangang 콘솔 통합](CONSOLE.md)

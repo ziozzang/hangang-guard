@@ -115,6 +115,10 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
                 for name, path in executables.items():
                     add_file(archive, path, f"{directory}/{name}", 0o755)
                 add_file(archive, license_file, f"{directory}/LICENSE", 0o644)
+                package = ROOT / "plugins" / "guard"
+                if package.is_dir():
+                    for filename in ("manifest.json", "index.js", "panel.html", "style.css"):
+                        add_file(archive, package / filename, f"{directory}/plugins/guard/{filename}", 0o644)
 
     if not unsigned:
         payload = {

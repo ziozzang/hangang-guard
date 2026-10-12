@@ -1,0 +1,99 @@
+{
+  "id": "guard",
+  "name": "Guard",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entry": "index.js",
+  "assets": {
+    "index.js": "641b1260f17980923296bce44951993f1259a992717a95fc65f5d9e32fed75fc",
+    "panel.html": "396a177fcdc6ca6c2dea1d176310a2f57b90af9bccfe0a9c600d7326b7623773",
+    "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
+  },
+  "routes": [
+    {
+      "path": "status",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "policy",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "policy",
+      "method": "PUT",
+      "mutation": true
+    },
+    {
+      "path": "candidates",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "candidates/approve",
+      "method": "POST",
+      "mutation": true
+    },
+    {
+      "path": "blocks",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "blocks",
+      "method": "POST",
+      "mutation": true
+    },
+    {
+      "path": "blocks",
+      "method": "DELETE",
+      "mutation": true
+    },
+    {
+      "path": "lookup",
+      "method": "POST",
+      "mutation": false
+    },
+    {
+      "path": "networks/inspect",
+      "method": "POST",
+      "mutation": false
+    },
+    {
+      "path": "rules",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "rules",
+      "method": "PUT",
+      "mutation": true
+    },
+    {
+      "path": "rules/lua",
+      "method": "PUT",
+      "mutation": true
+    },
+    {
+      "path": "rules/validate",
+      "method": "POST",
+      "mutation": false
+    },
+    {
+      "path": "geoip/reload",
+      "method": "POST",
+      "mutation": true
+    },
+    {
+      "path": "update/status",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "update/check",
+      "method": "POST",
+      "mutation": true
+    }
+  ]
+}

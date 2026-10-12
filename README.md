@@ -122,3 +122,5 @@ and [design](docs/DESIGN.md) for the delivery procedure.
 ## Signed updates
 
 [Update trust model and lifecycle](docs/UPDATES.md)
+
+Use [Guard in the native Hangang console](docs/CONSOLE.md) with delegated host authentication and a pinned package.
