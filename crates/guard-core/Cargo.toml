@@ -1,0 +1,10 @@
+[package]
+name = "guard-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+ipnet = "2"
