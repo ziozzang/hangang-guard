@@ -260,7 +260,10 @@ impl UpdateManager {
                 "signed manifest version differs from GitHub release tag"
             );
             ensure!(
-                manifest.artifact_url == expected.artifact_url,
+                crate::github_release::artifact_urls_match(
+                    &manifest.artifact_url,
+                    &expected.artifact_url
+                ),
                 "signed artifact URL differs from selected GitHub asset"
             );
             ensure!(

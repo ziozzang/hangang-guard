@@ -78,7 +78,7 @@ class PreparationTests(unittest.TestCase):
         artifact = self.output / f"sumunjang-{release.TARGET}"
         self.assertEqual(payload["version"], "0.3.0")
         self.assertEqual(payload["target"], release.TARGET)
-        self.assertEqual(payload["artifact_url"], f"https://github.com/ziozzang/hangang-guard/releases/download/v0.3.0/sumunjang-{release.TARGET}")
+        self.assertEqual(payload["artifact_url"], f"https://github.com/ziozzang/sumunjang/releases/download/v0.3.0/sumunjang-{release.TARGET}")
         self.assertEqual(payload["size"], artifact.stat().st_size)
         self.assertEqual(payload["sha256"], hashlib.sha256(artifact.read_bytes()).hexdigest())
         self.assertFalse(list(self.output.glob(".release-payload-*")))

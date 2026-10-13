@@ -5,8 +5,9 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-pub const REPOSITORY: &str = "ziozzang/hangang-guard";
-pub const API_URL: &str = "https://api.github.com/repos/ziozzang/hangang-guard/releases/latest";
+pub const REPOSITORY: &str = "ziozzang/sumunjang";
+pub const LEGACY_REPOSITORY: &str = "ziozzang/hangang-guard";
+pub const API_URL: &str = "https://api.github.com/repos/ziozzang/sumunjang/releases/latest";
 const MAX_METADATA: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +199,19 @@ pub(crate) async fn fetch_authenticated(
     Ok(release)
 }
 
+/// Exact old-to-new repository transition for already signed release manifests.
+/// Scheme, host, tag and asset suffix remain fixed; no other repository is trusted.
+pub(crate) fn artifact_urls_match(signed: &str, expected: &str) -> bool {
+    signed == expected
+        || signed
+            .strip_prefix(&format!(
+                "https://github.com/{LEGACY_REPOSITORY}/releases/download/"
+            ))
+            .is_some_and(|suffix| {
+                expected == format!("https://github.com/{REPOSITORY}/releases/download/{suffix}")
+            })
+}
+
 /// A narrowly scoped exception to the generic updater's same-origin policy.
 /// Never applies to operator-provided manifest URLs or GitHub API requests.
 pub(crate) fn asset_redirect_allowed(original: &Url, next: &Url) -> bool {
@@ -211,10 +225,13 @@ pub(crate) fn asset_redirect_allowed(original: &Url, next: &Url) -> bool {
     if !transport(original) || !transport(next) {
         return false;
     }
-    let prefix = format!("/{REPOSITORY}/releases/download/");
+    let browser_asset = original.host_str() == Some("github.com")
+        && [REPOSITORY, LEGACY_REPOSITORY].iter().any(|repository| {
+            original
+                .path()
+                .starts_with(&format!("/{repository}/releases/download/"))
+        });
     let api_prefix = format!("/repos/{REPOSITORY}/releases/assets/");
-    let browser_asset =
-        original.host_str() == Some("github.com") && original.path().starts_with(&prefix);
     let api_asset = original.host_str() == Some("api.github.com")
         && original
             .path()
@@ -224,7 +241,13 @@ pub(crate) fn asset_redirect_allowed(original: &Url, next: &Url) -> bool {
         && (next.host_str() == Some("release-assets.githubusercontent.com")
             || (browser_asset
                 && next.host_str() == Some("github.com")
-                && next.path().starts_with(&prefix)))
+                && (next.path() == original.path()
+                    || original
+                        .path()
+                        .strip_prefix(&format!("/{LEGACY_REPOSITORY}/releases/download/"))
+                        .is_some_and(|suffix| {
+                            next.path() == format!("/{REPOSITORY}/releases/download/{suffix}")
+                        }))))
 }
 
 #[cfg(test)]
@@ -250,6 +273,31 @@ mod tests {
         );
         candidate.assets.pop();
         assert!(candidate.select("x86_64-unknown-linux-gnu").is_err());
+    }
+    #[test]
+    fn signed_repository_migration_is_exact_and_scoped() {
+        let old =
+            "https://github.com/ziozzang/hangang-guard/releases/download/v3.2/sumunjang-linux";
+        let new = "https://github.com/ziozzang/sumunjang/releases/download/v3.2/sumunjang-linux";
+        assert!(artifact_urls_match(old, new));
+        assert!(!artifact_urls_match(new, old));
+        assert!(!artifact_urls_match(old, &new.replace("v3.2", "v3.3")));
+        assert!(!artifact_urls_match(
+            old,
+            &new.replace("sumunjang-linux", "other")
+        ));
+        assert!(!artifact_urls_match(
+            old,
+            &new.replace("ziozzang", "attacker")
+        ));
+        assert!(asset_redirect_allowed(
+            &Url::parse(old).unwrap(),
+            &Url::parse(new).unwrap()
+        ));
+        assert!(!asset_redirect_allowed(
+            &Url::parse(old).unwrap(),
+            &Url::parse(&new.replace("sumunjang-linux", "other")).unwrap()
+        ));
     }
     fn release() -> Release {
         let binary = "hangang-guard-x86_64-unknown-linux-gnu";
@@ -313,7 +361,7 @@ mod tests {
     #[test]
     fn redirect_exception_is_specific_to_github_release_assets() {
         let from =
-            Url::parse("https://github.com/ziozzang/hangang-guard/releases/download/v9.0.0/binary")
+            Url::parse("https://github.com/ziozzang/sumunjang/releases/download/v9.0.0/binary")
                 .unwrap();
         let good = Url::parse("https://release-assets.githubusercontent.com/github-production-release-asset/asset?token=test").unwrap();
         assert!(asset_redirect_allowed(&from, &good));

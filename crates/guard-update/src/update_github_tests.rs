@@ -79,7 +79,7 @@ impl Fixture {
                     let target = "x86_64-unknown-linux-gnu";
                     let binary = format!("hangang-guard-{target}");
                     let artifact_url = format!(
-                        "https://github.com/ziozzang/hangang-guard/releases/download/v9.0.0/{binary}"
+                        "https://github.com/ziozzang/sumunjang/releases/download/v9.0.0/{binary}"
                     );
                     let mut manifest_artifact_url = artifact_url.clone();
                     let mut manifest_version = "9.0.0";
@@ -130,7 +130,7 @@ impl Fixture {
                     {
                         http_response("403 Forbidden", b"credential leaked")
                     } else if host == "api.github.com"
-                        && path.starts_with("/repos/ziozzang/hangang-guard/releases/assets/")
+                        && path.starts_with("/repos/ziozzang/sumunjang/releases/assets/")
                     {
                         let cdn_path = if path.ends_with("/2") {
                             "/cdn/manifest"
@@ -143,7 +143,7 @@ impl Fixture {
                             "tag_name":"v9.0.0", "draft":false, "prerelease":false,
                             "assets":[
                                 {"id":1,"name":binary,"browser_download_url":artifact_url,"size":artifact.len()},
-                                {"id":2,"name":format!("{binary}.manifest.json"),"browser_download_url":format!("https://github.com/ziozzang/hangang-guard/releases/download/v9.0.0/{binary}.manifest.json"),"size":manifest.len()}
+                                {"id":2,"name":format!("{binary}.manifest.json"),"browser_download_url":format!("https://github.com/ziozzang/sumunjang/releases/download/v9.0.0/{binary}.manifest.json"),"size":manifest.len()}
                             ]
                         }).to_string();
                         http_response("200 OK", metadata.as_bytes())
@@ -265,7 +265,7 @@ async fn github_release_update_is_end_to_end_bounded_and_bound_to_assets() -> an
     *fixture.mode.lock().await = Case::Good;
     let error = generic
         .stage(
-            "https://github.com/ziozzang/hangang-guard/releases/download/v9.0.0/hangang-guard-x86_64-unknown-linux-gnu.manifest.json",
+            "https://github.com/ziozzang/sumunjang/releases/download/v9.0.0/hangang-guard-x86_64-unknown-linux-gnu.manifest.json",
             temporary.path(),
         )
         .await

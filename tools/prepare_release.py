@@ -132,7 +132,7 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
         for binary in (artifact, legacy):
             payload = {
                 "version": version, "target": target,
-                "artifact_url": f"https://github.com/ziozzang/hangang-guard/releases/download/v{version}/{binary.name}",
+                "artifact_url": f"https://github.com/ziozzang/sumunjang/releases/download/v{version}/{binary.name}",
                 "size": binary.stat().st_size, "sha256": digest(binary),
             }
             manifest = output / f"{binary.name}.manifest.json"

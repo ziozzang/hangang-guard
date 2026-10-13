@@ -20,7 +20,7 @@ mismatches are rejected.
 Transport requires HTTPS. A manifest is limited to 64 KiB and its binary to
 128 MiB; downloads are streamed to a temporary file. Generic HTTPS redirects
 must retain the original scheme, host, and port. The GitHub release mode allows
-only the pinned `ziozzang/hangang-guard` release asset paths, their corresponding
+only the pinned `ziozzang/sumunjang` release asset paths, their corresponding
 GitHub API asset IDs, and GitHub's `release-assets.githubusercontent.com` CDN.
 Release metadata is discovery information, never a signing authority. Selected
 asset URL, size, target, and release version must agree with the signed payload.
@@ -39,7 +39,7 @@ The signed payload has exactly these fields:
 {
   "version": "0.3.0",
   "target": "x86_64-unknown-linux-gnu",
-  "artifact_url": "https://github.com/ziozzang/hangang-guard/releases/download/v0.3.0/hangang-guard-x86_64-unknown-linux-gnu",
+  "artifact_url": "https://github.com/ziozzang/sumunjang/releases/download/v0.3.0/hangang-guard-x86_64-unknown-linux-gnu",
   "sha256": "<64 lowercase hexadecimal characters>",
   "size": 12345678
 }
