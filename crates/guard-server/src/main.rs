@@ -705,7 +705,7 @@ fn main() -> anyhow::Result<()> {
     if args.about {
         println!(
             "{}",
-            json!({"name":"sumunjang","version":env!("CARGO_PKG_VERSION"),"repository":"https://github.com/ziozzang/hangang-guard","role":"zero-trust IP/network decision authority","principal_management":"hopae","target":env!("GUARD_TARGET"),"supervised_updates":cfg!(target_os="linux")})
+            json!({"name":"sumunjang","version":env!("CARGO_PKG_VERSION"),"repository":"https://github.com/ziozzang/sumunjang","role":"zero-trust IP/network decision authority","principal_management":"hopae","target":env!("GUARD_TARGET"),"supervised_updates":cfg!(target_os="linux")})
         );
         return Ok(());
     }

@@ -16,7 +16,7 @@ TOFU나 unsigned fallback은 없습니다. Decode한 payload의 정확한 바이
 
 HTTPS 필수, manifest 64KiB, binary 128MiB 이하이며 임시 파일로 streaming합니다.
 일반 HTTPS redirect는 scheme/host/port를 유지해야 합니다. GitHub 모드는 고정된
-`ziozzang/hangang-guard` asset 경로, 해당 API asset ID, GitHub
+`ziozzang/sumunjang` asset 경로, 해당 API asset ID, GitHub
 `release-assets.githubusercontent.com` CDN만 허용합니다. Release metadata는 탐색 정보이며
 서명 authority가 아닙니다. URL/크기/target/release version은 서명 payload와 일치해야 합니다.
 
@@ -32,7 +32,7 @@ HTTPS 필수, manifest 64KiB, binary 128MiB 이하이며 임시 파일로 stream
 {
   "version": "0.3.0",
   "target": "x86_64-unknown-linux-gnu",
-  "artifact_url": "https://github.com/ziozzang/hangang-guard/releases/download/v0.3.0/hangang-guard-x86_64-unknown-linux-gnu",
+  "artifact_url": "https://github.com/ziozzang/sumunjang/releases/download/v0.3.0/hangang-guard-x86_64-unknown-linux-gnu",
   "sha256": "<64 lowercase hexadecimal characters>",
   "size": 12345678
 }
