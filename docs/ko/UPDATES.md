@@ -24,6 +24,19 @@ HTTPS 필수, manifest 64KiB, binary 128MiB 이하이며 임시 파일로 stream
 토큰은 고정 API와 선택한 API asset에만 전달하고 CDN cross-origin redirect에서는
 제거합니다. 일반 manifest 다운로드에는 전달하지 않습니다. CLI/URL/status/log에 넣지 마세요.
 
+## v0.3.3 저장소 이전
+
+공식 저장소는 `ziozzang/sumunjang`입니다. v0.3.2까지의 바이너리는 GitHub API
+탐색 주소를 `ziozzang/hangang-guard`로 고정하며 API 리다이렉트를 거부합니다.
+최초 전환에는 서명을 검증한 v0.3.3 바이너리를 한 번 설치해야 합니다.
+저장소 이름 변경만으로 구 클라이언트가 자동 전환되지는 않습니다.
+독립적으로 공급한 릴리즈 공개키는 유지합니다.
+
+기존 서명 자산에 대해서만 v0.3.3은 릴리즈 태그와 파일명을 그대로 유지하는
+정확한 구 저장소→새 저장소 접두사 변경을 허용합니다. 서명 원문·버전·대상·크기·
+해시는 계속 검증합니다. 다른 저장소나 변경된 태그·파일명은 거부하며,
+일반 manifest URL에는 이전 예외를 적용하지 않습니다.
+
 ## Release manifest
 
 서명 payload는 다음 필드만 포함합니다.

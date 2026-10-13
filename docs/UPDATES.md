@@ -31,6 +31,19 @@ asset URLs. Authorization is removed on cross-origin redirects to the CDN.
 Generic HTTPS manifest downloads never receive this token. Avoid placing it in
 command-line arguments, manifest URLs, status responses, or logs.
 
+## Repository migration in v0.3.3
+
+The canonical repository is `ziozzang/sumunjang`. Binaries through v0.3.2 pin
+`ziozzang/hangang-guard` for GitHub API discovery and reject API redirects.
+Install a signature-verified v0.3.3 binary once to bootstrap that transition;
+the repository rename alone does not make those older clients update automatically.
+Keep the independently provisioned release public key unchanged.
+
+For historical signed assets, v0.3.3 accepts only the exact old-to-new repository
+prefix change while preserving the release tag and filename. The signed bytes,
+version, target, size and hash remain verified. Other repositories, changed tags
+or changed filenames are rejected; generic manifest URLs gain no migration exception.
+
 ## Release manifest
 
 The signed payload has exactly these fields:
