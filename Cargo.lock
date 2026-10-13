@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "guard-core"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "ipnet",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "guard-load"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "guard-server"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -670,19 +670,23 @@ dependencies = [
  "libc",
  "maxminddb",
  "mlua",
+ "rcgen",
  "reqwest",
  "rusqlite",
+ "rustls",
+ "rustls-pemfile",
  "semver",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tower",
 ]
 
 [[package]]
 name = "guard-update"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1566,6 +1570,15 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

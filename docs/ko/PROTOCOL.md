@@ -3,11 +3,11 @@
 [English](../PROTOCOL.md) · [문서 목록](README.md)
 
 HTTP API는 관리와 증거 제출에 사용합니다. 선택적 바이너리 리스너는 JSON 없이
-동일한 정책·룰·GeoIP 문맥으로 일반 IP 판단을 처리합니다. 평문 **loopback 전용**이며
-연결당 한 번 인증합니다. 원격 전송에는 HTTPS를 사용합니다.
+동일한 정책·룰·GeoIP 문맥으로 일반 IP 판단을 처리합니다. 평문은 literal loopback으로
+제한하고 원격 네이티브 리스너에는 mTLS와 collector token 인증을 함께 요구합니다.
 
 ```sh
-hangang-guard --decision-listen 127.0.0.1:9081
+sumunjang --decision-listen 127.0.0.1:9081
 hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081
 ```
 
@@ -54,3 +54,22 @@ HTTP 전송으로 자동 전환하지 않습니다.
 연결, 인증, 읽기/쓰기가 포함됩니다. TTL은 질의 시작부터 측정하여 전송 지연이
 유효 시간을 늘리지 못합니다. 이유·GeoIP 이름·점수·인증 정보는 판단 프레임에
 포함하지 않으며 관리자 API에서 조회합니다.
+
+## 네이티브 원격 mTLS 리스너
+
+서버는 `--decision-listen`과 함께 `--decision-tls-cert`·`--decision-tls-key`·
+`--decision-client-ca`를 받습니다. 루프백 밖에서는 TLS 설정이 필수이며
+`0.0.0.0`에 인증된 endpoint를 열 수 있습니다. PEM은 일반 파일이어야 하고
+파일별 1 MiB로 제한하며 서비스 시작 전에 검증합니다(`--check` 포함). 서버는
+명시적인 client CA만 신뢰하고 ALPN `hgd1`을 요구하며 TLS early data를 끕니다.
+TLS 이후에도 collector token 인증은 필수이고 mTLS가 관리자 권한을 부여하지 않습니다.
+
+기존 최대 256개 연결 안에서 TLS 핸드셰이크를 3초로 제한합니다. 연결은 300초 후
+종료합니다. Idle 읽기는 30초로 유지하되 부분적인 24바이트 프레임은 5초 안에
+완성해야 하고 조금씩 보내도 기한이 초기화되지 않습니다. 파이프라인 응답과
+불변 인메모리 판단은 기존 의미를 유지하고 DB 질의를 하지 않습니다.
+
+Hangang 원격 HGD1 client 설정과 실제 두 프로세스 배포 검증은 후속 작업입니다.
+네이티브 TLS 옵션은 HTTP 관리/근거 리스너를 변경하지 않습니다. 원격 HTTP는 기존
+로컬 broker 또는 별도로 인증되는 TLS ingress를 사용합니다. 이 변경으로 복제 서버
+membership이나 전체 스택 TLS 처리량이 검증된 것은 아닙니다.

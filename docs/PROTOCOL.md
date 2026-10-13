@@ -4,11 +4,11 @@
 
 The HTTP API remains the management/evidence interface. The optional binary
 listener handles ordinary IP decisions with the same policy, rules and GeoIP
-context, without JSON. It is plaintext **loopback only** and authenticated once
-per connection; remote transport still uses HTTPS. Enable with:
+context, without JSON. Plaintext is restricted to literal loopback; remote native
+listeners require mTLS and still authenticate the collector token. Enable with:
 
 ```sh
-hangang-guard --decision-listen 127.0.0.1:9081
+sumunjang --decision-listen 127.0.0.1:9081
 hangang --guard-url http://127.0.0.1:9080 --guard-decision-tcp 127.0.0.1:9081
 ```
 
@@ -58,3 +58,25 @@ single request timeout includes pool wait, connect, auth, read/write. TTL is
 measured from query start, so transport latency cannot extend decision validity.
 No reason strings, GeoIP names, scores or credentials occur in decision frames;
 operator inspection uses admin APIs instead.
+
+## Native remote mTLS listener
+
+The server accepts `--decision-tls-cert`, `--decision-tls-key` and
+`--decision-client-ca` together with `--decision-listen`. Outside loopback the
+TLS configuration is mandatory; `0.0.0.0` can bind the authenticated endpoint.
+PEM material must be a regular file, is capped at 1 MiB per file and is checked
+before serving (including `--check`). The server trusts only the explicit
+client CA, requires ALPN `hgd1` and disables TLS early data. Collector-token
+authentication remains mandatory after TLS; mTLS does not grant admin access.
+
+TLS handshakes are bounded to 3 seconds within the existing 256-connection
+limit. Connections expire after 300 seconds. Idle reads retain the 30-second
+bound, but a partial 24-byte frame must finish within 5 seconds; trickling
+bytes cannot restart its deadline. Pipelined replies and immutable in-memory
+decisions keep their existing semantics and avoid database queries.
+
+Hangang remote HGD1 client configuration and actual cross-process deployment
+qualification are follow-up work. HTTP management/evidence listeners are
+unchanged by these native TLS flags; use the existing local broker or a
+separately authenticated TLS ingress for remote HTTP access. This change does
+not establish replica membership or measured full-stack TLS throughput.

@@ -1,4 +1,4 @@
-//! Loopback binary decisions v1: authenticated persistent connection, fixed frames.
+//! Binary decisions v1: authenticated persistent connection, fixed frames.
 use crate::{App, now};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -6,8 +6,8 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::TcpListener,
     sync::{Semaphore, watch},
     task::JoinSet,
     time::timeout,
@@ -17,6 +17,37 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CONNECTIONS: usize = 256;
 const REQUEST_LEN: usize = 24;
+pub(crate) fn tls_acceptor(
+    cert: &std::path::Path,
+    key: &std::path::Path,
+    ca: &std::path::Path,
+) -> anyhow::Result<tokio_rustls::TlsAcceptor> {
+    let read = |path: &std::path::Path| crate::read_bounded(path, 1024 * 1024);
+    let cert = read(cert)?;
+    let key = read(key)?;
+    let ca = read(ca)?;
+    let certs = rustls_pemfile::certs(&mut cert.as_slice()).collect::<std::io::Result<Vec<_>>>()?;
+    let key = rustls_pemfile::private_key(&mut key.as_slice())?
+        .ok_or_else(|| anyhow::anyhow!("missing native TLS key"))?;
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut ca.as_slice()) {
+        roots.add(cert?)?;
+    }
+    anyhow::ensure!(!roots.is_empty(), "native TLS client CA is empty");
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        provider.clone(),
+    )
+    .build()?;
+    let mut config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(certs, key)?;
+    config.alpn_protocols = vec![b"hgd1".to_vec()];
+    config.max_early_data_size = 0;
+    Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
+}
 fn matches_token(supplied: &[u8], expected: &[u8]) -> bool {
     supplied.len() == expected.len()
         && supplied
@@ -44,8 +75,10 @@ fn decode(frame: &[u8; REQUEST_LEN]) -> anyhow::Result<(u32, IpAddr)> {
     };
     Ok((correlation, ip))
 }
-async fn connection(mut stream: TcpStream, app: App) -> anyhow::Result<()> {
-    stream.set_nodelay(true)?;
+async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
+    mut stream: S,
+    app: App,
+) -> anyhow::Result<()> {
     timeout(AUTH_TIMEOUT, async {
         let mut header = [0u8; 6];
         stream.read_exact(&mut header).await?;
@@ -67,8 +100,19 @@ async fn connection(mut stream: TcpStream, app: App) -> anyhow::Result<()> {
     let mut requests = [0u8; REQUEST_LEN * 256];
     let mut responses = [0u8; REQUEST_LEN * 256];
     let mut filled = 0;
+    let mut partial_since = tokio::time::Instant::now();
     loop {
-        let n = timeout(IDLE_TIMEOUT, stream.read(&mut requests[filled..])).await??;
+        let budget = if filled == 0 {
+            IDLE_TIMEOUT
+        } else {
+            let elapsed = partial_since.elapsed();
+            anyhow::ensure!(elapsed < AUTH_TIMEOUT, "partial query deadline exceeded");
+            AUTH_TIMEOUT - elapsed
+        };
+        let n = timeout(budget, stream.read(&mut requests[filled..])).await??;
+        if filled == 0 {
+            partial_since = tokio::time::Instant::now();
+        }
         if n == 0 {
             anyhow::ensure!(filled == 0, "truncated query frame");
             return Ok(());
@@ -99,14 +143,30 @@ async fn connection(mut stream: TcpStream, app: App) -> anyhow::Result<()> {
         timeout(WRITE_TIMEOUT, stream.write_all(&responses[..complete])).await??;
         requests.copy_within(complete..filled, 0);
         filled -= complete;
+        if filled != 0 {
+            partial_since = tokio::time::Instant::now();
+        }
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn serve(
     listener: TcpListener,
     app: App,
-    mut stop: watch::Receiver<bool>,
+    stop: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
+    serve_with_tls(listener, app, stop, None).await
+}
+pub(crate) async fn serve_with_tls(
+    listener: TcpListener,
+    app: App,
+    mut stop: watch::Receiver<bool>,
+    tls: Option<tokio_rustls::TlsAcceptor>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        tls.is_some() || listener.local_addr()?.ip().is_loopback(),
+        "remote native decisions require mTLS"
+    );
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut clients = JoinSet::new();
     loop {
@@ -114,8 +174,9 @@ pub(crate) async fn serve(
             _=stop.changed()=>break,
             accepted=listener.accept()=>{
                 let (stream,peer)=accepted?;
-                if !peer.ip().is_loopback(){continue;}
-                if let Ok(permit)=slots.clone().try_acquire_owned(){let app=app.clone();clients.spawn(async move {let _permit=permit;let _=connection(stream,app).await;});}
+                if tls.is_none() && !peer.ip().is_loopback(){continue;}
+                if stream.set_nodelay(true).is_err(){continue;}
+                if let Ok(permit)=slots.clone().try_acquire_owned(){let app=app.clone();let tls=tls.clone();clients.spawn(async move {let _permit=permit;if let Some(tls)=tls {if let Ok(Ok(stream))=timeout(Duration::from_secs(3),tls.accept(stream)).await && stream.get_ref().1.alpn_protocol()==Some(b"hgd1".as_slice()){let _=timeout(Duration::from_secs(300),connection(stream,app)).await;}} else {let _=timeout(Duration::from_secs(300),connection(stream,app)).await;}});}
             },
             _=clients.join_next(),if !clients.is_empty()=>{},
         }
@@ -128,7 +189,112 @@ pub(crate) async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    };
+    #[tokio::test]
+    async fn remote_mtls_requires_identity_and_preserves_native_decisions() {
+        use rcgen::{
+            BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
+            KeyPair,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let mut params = CertificateParams::new(vec![]).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap();
+        let server_key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(vec!["sumunjang.example.test".into()]).unwrap();
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let server_cert = params.signed_by(&server_key, &ca).unwrap();
+        std::fs::write(temp.path().join("ca.pem"), ca.pem()).unwrap();
+        std::fs::write(temp.path().join("server.pem"), server_cert.pem()).unwrap();
+        std::fs::write(temp.path().join("server.key"), server_key.serialize_pem()).unwrap();
+        let tls = tls_acceptor(
+            &temp.path().join("server.pem"),
+            &temp.path().join("server.key"),
+            &temp.path().join("ca.pem"),
+        )
+        .unwrap();
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let address =
+            std::net::SocketAddr::from(([127, 0, 0, 1], listener.local_addr().unwrap().port()));
+        let (tx, rx) = watch::channel(false);
+        let worker = tokio::spawn(serve_with_tls(listener, crate::tests::app(), rx, Some(tls)));
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(ca.der().clone()).unwrap();
+        let client_key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(vec![]).unwrap();
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        let client_cert = params.signed_by(&client_key, &ca).unwrap();
+        let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots.clone())
+            .with_client_auth_cert(
+                vec![client_cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(client_key.serialize_der().into()),
+            )
+            .unwrap();
+        config.alpn_protocols = vec![b"hgd1".to_vec()];
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        assert!(
+            connector
+                .connect(
+                    "wrong.example.test".try_into().unwrap(),
+                    TcpStream::connect(address).await.unwrap()
+                )
+                .await
+                .is_err()
+        );
+        let mut stream = connector
+            .connect(
+                "sumunjang.example.test".try_into().unwrap(),
+                TcpStream::connect(address).await.unwrap(),
+            )
+            .await
+            .unwrap();
+        auth(&mut stream, b"collector-test-token").await;
+        let mut ack = [0; 4];
+        stream.read_exact(&mut ack).await.unwrap();
+        assert_eq!(&ack, b"HGA1");
+        for id in 1u32..=2 {
+            let mut request = [0; 24];
+            request[0] = 1;
+            request[1] = 4;
+            request[4..8].copy_from_slice(&id.to_be_bytes());
+            request[8..12].copy_from_slice(&[192, 0, 2, 1]);
+            stream.write_all(&request).await.unwrap();
+            let mut response = [0; 24];
+            stream.read_exact(&mut response).await.unwrap();
+            assert_eq!(response[0], 1);
+            assert_eq!(response[1], 0);
+            assert_eq!(&response[4..8], &request[4..8]);
+        }
+        let mut anonymous = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        anonymous.alpn_protocols = vec![b"hgd1".to_vec()];
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(anonymous));
+        if let Ok(mut stream) = connector
+            .connect(
+                "sumunjang.example.test".try_into().unwrap(),
+                TcpStream::connect(address).await.unwrap(),
+            )
+            .await
+        {
+            let mut byte = [0];
+            assert!(stream.read(&mut byte).await.is_err());
+        }
+        tx.send(true).unwrap();
+        worker.await.unwrap().unwrap();
+        let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let (_, rx) = watch::channel(false);
+        assert!(serve(listener, crate::tests::app(), rx).await.is_err());
+    }
     async fn start() -> (
         std::net::SocketAddr,
         watch::Sender<bool>,
@@ -140,11 +306,34 @@ mod tests {
         let worker = tokio::spawn(serve(listener, crate::tests::app(), rx));
         (address, tx, worker)
     }
-    async fn auth(stream: &mut TcpStream, token: &[u8]) {
+    async fn auth<S: AsyncWrite + Unpin>(stream: &mut S, token: &[u8]) {
         let mut frame = b"HGD1".to_vec();
         frame.extend_from_slice(&(token.len() as u16).to_be_bytes());
         frame.extend_from_slice(token);
         stream.write_all(&frame).await.unwrap();
+    }
+    #[tokio::test]
+    async fn partial_frame_trickling_does_not_reset_completion_deadline() {
+        let (address, stop, worker) = start().await;
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        auth(&mut stream, b"collector-test-token").await;
+        let mut ack = [0; 4];
+        stream.read_exact(&mut ack).await.unwrap();
+        let started = tokio::time::Instant::now();
+        stream.write_all(&[1]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        stream.write_all(&[4]).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            timeout(Duration::from_secs(4), stream.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert!(started.elapsed() < Duration::from_secs(6));
+        stop.send(true).unwrap();
+        worker.await.unwrap().unwrap();
     }
     #[tokio::test]
     async fn persistent_queries_and_shutdown() {
