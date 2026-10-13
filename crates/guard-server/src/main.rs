@@ -61,9 +61,15 @@ struct Args {
 
     #[arg(long, default_value = "127.0.0.1:9080")]
     listen: String,
-    /// Optional loopback-only persistent binary decision endpoint.
+    /// Optional persistent binary decision endpoint; remote listeners require mTLS.
     #[arg(long)]
     decision_listen: Option<std::net::SocketAddr>,
+    #[arg(long, requires_all = ["decision_tls_key", "decision_client_ca", "decision_listen"])]
+    decision_tls_cert: Option<PathBuf>,
+    #[arg(long, requires = "decision_tls_cert")]
+    decision_tls_key: Option<PathBuf>,
+    #[arg(long, requires = "decision_tls_cert")]
+    decision_client_ca: Option<PathBuf>,
     #[arg(long,default_value_t=4096,value_parser=clap::value_parser!(u32).range(1..=65536))]
     max_http_requests: u32,
     #[arg(long,default_value_t=8,value_parser=clap::value_parser!(u16).range(1..=64))]
@@ -596,7 +602,14 @@ async fn update_check(HttpState(app): HttpState<App>) -> ApiResult {
 
 fn read_bounded(path: &std::path::Path, max: usize) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
-    let file = std::fs::File::open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
     anyhow::ensure!(
         file.metadata()?.is_file(),
         "configured input is not a regular file"
@@ -729,10 +742,22 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
     if let Some(address) = args.decision_listen {
         anyhow::ensure!(
-            address.ip().is_loopback(),
-            "binary decision listener must bind loopback"
+            (address.ip().is_loopback() || args.decision_tls_cert.is_some())
+                && !address.ip().is_multicast(),
+            "remote binary decision listener requires mTLS"
         );
     }
+    let decision_tls = args
+        .decision_tls_cert
+        .as_ref()
+        .map(|cert| {
+            protocol::tls_acceptor(
+                cert,
+                args.decision_tls_key.as_ref().unwrap(),
+                args.decision_client_ca.as_ref().unwrap(),
+            )
+        })
+        .transpose()?;
     if args.check {
         check_configuration(&args)?;
         println!("configuration valid");
@@ -836,8 +861,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
     let binary_worker = if let Some(address) = args.decision_listen {
         anyhow::ensure!(
-            address.ip().is_loopback(),
-            "binary decision listener must bind loopback"
+            (address.ip().is_loopback() || args.decision_tls_cert.is_some())
+                && !address.ip().is_multicast(),
+            "remote binary decision listener requires mTLS"
         );
         let binary = if args.serve_child {
             #[cfg(target_os = "linux")]
@@ -852,10 +878,11 @@ async fn run(args: Args) -> anyhow::Result<()> {
             tokio::net::TcpListener::bind(address).await?
         };
         eprintln!("binary decisions listening on {}", binary.local_addr()?);
-        Some(tokio::spawn(protocol::serve(
+        Some(tokio::spawn(protocol::serve_with_tls(
             binary,
             app.clone(),
             stop_rx.clone(),
+            decision_tls,
         )))
     } else {
         None
