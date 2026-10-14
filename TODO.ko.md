@@ -174,3 +174,12 @@ direction·peer·protocol·port이며 `--evaluate-kubernetes-policy FILE`은 DB/
 규칙/types 모순은 명시적으로 거부합니다. 지원 부분집합이며 전체 K8s 호환이나
 실행 중 집행은 아닙니다. 실제 API 수집·peer 구체화·UID/원천 신선도·한강 문맥
 연결은 남아 있습니다.
+
+## 실제 API 기본값 적용 NetworkPolicy 검증
+
+소유한 클러스터의 server dry-run JSON 응답을 실제 수문장 오프라인 평가 명령에
+전달하도록 검증 도구를 확장했습니다. ingress/egress 기본값, 명시적 egress 격리,
+빈 규칙 허용, 기본 TCP, 프로토콜 불일치, CIDR 예외와 숫자 endPort의 8개 평가가
+기존 선택자 문법 비교 12개와 함께 통과했습니다. 리소스를 저장하지 않고 CNI
+패킷 집행을 주장하지 않습니다. 실제 API 정책 구조와 구현된 평가기를 연결한
+검증이며 수집/watch·원천 신선도·실행 중 연결은 남았습니다.

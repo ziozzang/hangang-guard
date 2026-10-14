@@ -45,7 +45,35 @@ def main():
                                    capture_output=True, timeout=5)
             if (api.returncode == 0) != expected or (local.returncode == 0) != expected:
                 raise RuntimeError('selector acceptance mismatch: ' + label)
-    print('PASS: 12 selector syntax cases agree with owned Kubernetes server dry-run; no objects persisted')
+        policy_cases = [
+            ('default-ingress-deny', {'podSelector': {}}, 'Ingress', 'TCP', 443, 'denied'),
+            ('default-egress-open', {'podSelector': {}}, 'Egress', 'TCP', 443, 'not_isolated'),
+            ('explicit-egress-deny', {'podSelector': {}, 'policyTypes': ['Egress']}, 'Egress', 'TCP', 443, 'denied'),
+            ('empty-rule-allows', {'podSelector': {}, 'ingress': [{}]}, 'Ingress', 'UDP', 53, 'allowed'),
+            ('port-default-tcp', {'podSelector': {}, 'ingress': [{'ports': [{'port': 443}]}]}, 'Ingress', 'TCP', 443, 'allowed'),
+            ('port-protocol-mismatch', {'podSelector': {}, 'ingress': [{'ports': [{'port': 443}]}]}, 'Ingress', 'UDP', 443, 'denied'),
+            ('cidr-exception', {'podSelector': {}, 'ingress': [{'from': [{'ipBlock': {'cidr': '192.0.2.0/24', 'except': ['192.0.2.64/26']}}]}]}, 'Ingress', 'TCP', 443, 'denied'),
+            ('range-boundary', {'podSelector': {}, 'ingress': [{'ports': [{'port': 443, 'endPort': 444}]}]}, 'Ingress', 'TCP', 444, 'allowed'),
+        ]
+        for label, spec, direction, protocol, port, expected in policy_cases:
+            document = {'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy',
+                        'metadata': {'name': 'owned-policy-evaluation', 'namespace': 'default'}, 'spec': spec}
+            api = subprocess.run(['docker', 'exec', '-i', args.owned_container,
+                                  'kubectl', '--kubeconfig', '/etc/kubernetes/admin.conf',
+                                  'create', '--dry-run=server', '-f', '-', '-o', 'json'],
+                                 input=json.dumps(document), text=True, capture_output=True, timeout=15)
+            if api.returncode:
+                raise RuntimeError('owned API rejected policy fixture: ' + label)
+            policy = json.loads(api.stdout)
+            path.write_text(json.dumps({'policy': policy, 'namespace': 'default', 'labels': {},
+                                        'direction': direction, 'peer': '192.0.2.70',
+                                        'protocol': protocol, 'port': port}))
+            result = subprocess.run([binary, '--evaluate-kubernetes-policy', str(path)],
+                                    text=True, capture_output=True, timeout=5)
+            if result.returncode or result.stdout.strip() != expected:
+                raise RuntimeError('API-defaulted policy evaluation mismatch: ' + label)
+    print('PASS: 12 selector syntax cases and 8 API-defaulted policy evaluations; no objects persisted; CNI enforcement not qualified')
+
 
 
 if __name__ == '__main__':

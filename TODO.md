@@ -172,3 +172,15 @@ fields, selector peers, explicit empty peers, named ports and contradictory
 rules/types are explicitly refused, not broadened. This is a supported subset,
 not complete Kubernetes conformance or runtime enforcement. Actual API collection,
 peer materialization, UID/source freshness and Hangang context remain open.
+
+## Real API-defaulted NetworkPolicy adapter qualification
+
+The maintained owned-cluster tool now passes actual server dry-run JSON responses
+into the real Sumunjang offline policy evaluator. Eight evaluations cover ingress
+and egress defaulting, explicit egress isolation, empty-rule allowance, default
+TCP, protocol mismatch, CIDR exceptions and numeric endPort. All pass alongside
+12 selector syntax acceptance comparisons. No objects are persisted and no CNI
+packet enforcement is asserted. This bridges API-returned policy shape to the
+implemented evaluator; collection/watch, source freshness and runtime integration
+remain open. Run `python3 tools/kubernetes_selector_qualification.py --binary
+/path/to/sumunjang` against an owned qualification container.
