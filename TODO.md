@@ -204,3 +204,17 @@ invalid replacement cannot alter the old view. Six adapter tests, strict clippy
 and the 22 actual owned-API qualification cases pass. No live publication/freshness
 state machine is implemented yet; preserving an old candidate in this unit test is
 not permission to serve stale authoritative policy. Production remains unchanged.
+
+## Compiled NetworkPolicy sets
+
+The offline adapter now accepts a bounded NetworkPolicyList and compiles every
+item before returning a candidate. It rejects a nonempty list continuation token
+and invalid members; an incomplete API page cannot silently become a policy set.
+Decision evaluation combines selected policies additively: one applicable allow
+wins, while unselected policies or policies isolating only the opposite direction
+do not clear another policy's denial. Empty/unselected sets report not_selected;
+callers must apply ordinary Kubernetes non-isolation semantics rather than treating
+that as a zero-trust authorization grant. Seven adapter tests, strict clippy and
+22 owned API regression cases pass. Lists currently scan bounded policy candidates;
+large-policy indexing, actual pagination collection and runtime freshness remain
+open. No production authority is activated.

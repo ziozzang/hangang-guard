@@ -138,6 +138,69 @@ impl CompiledPolicy {
         }
     }
 }
+#[derive(Clone)]
+struct CompiledPolicySet {
+    policies: Vec<CompiledPolicy>,
+}
+impl CompiledPolicySet {
+    fn compile(source: &serde_json::Value) -> Result<Self> {
+        if source["kind"] != "NetworkPolicyList" {
+            return Ok(Self {
+                policies: vec![compile_policy(source)?],
+            });
+        }
+        ensure!(
+            source["apiVersion"] == "networking.k8s.io/v1",
+            "wrong policy list version"
+        );
+        if let Some(continuation) = source["metadata"].get("continue") {
+            ensure!(
+                continuation.as_str() == Some(""),
+                "partial policy list cannot be authoritative"
+            );
+        }
+        let items = source["items"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("policy list items required"))?;
+        ensure!(items.len() <= 4096, "too many network policies");
+        let mut policies = Vec::with_capacity(items.len());
+        for item in items {
+            policies.push(compile_policy(item)?);
+        }
+        Ok(Self { policies })
+    }
+    fn decide(
+        &self,
+        namespace: &str,
+        labels: &BTreeMap<String, String>,
+        direction: Direction,
+        peer: std::net::IpAddr,
+        protocol: Transport,
+        port: u16,
+    ) -> &'static str {
+        let mut selected = false;
+        let mut isolated = false;
+        for policy in &self.policies {
+            match policy.decide(namespace, labels, direction, peer, protocol, port) {
+                "allowed" => return "allowed",
+                "denied" => {
+                    selected = true;
+                    isolated = true;
+                }
+                "not_isolated" => selected = true,
+                "not_selected" => {}
+                _ => unreachable!("compiled policy decision"),
+            }
+        }
+        if isolated {
+            "denied"
+        } else if selected {
+            "not_isolated"
+        } else {
+            "not_selected"
+        }
+    }
+}
 fn transport(value: &str) -> Result<Transport> {
     match value {
         "TCP" => Ok(Transport::Tcp),
@@ -315,7 +378,7 @@ pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
         "policy evaluation document too large"
     );
     let query: OfflineEvaluation = serde_json::from_slice(bytes)?;
-    let compiled = compile_policy(&query.policy)?;
+    let compiled = CompiledPolicySet::compile(&query.policy)?;
     let direction = match query.direction.as_str() {
         "Ingress" => Direction::Ingress,
         "Egress" => Direction::Egress,
@@ -339,6 +402,37 @@ mod tests {
     }
     fn evaluate(value: &serde_json::Value) -> Result<&'static str> {
         evaluate_policy(&serde_json::to_vec(value)?)
+    }
+    #[test]
+    fn policy_list_is_additive_without_unselected_or_opposite_direction_bypass() {
+        let deny = query(serde_json::json!({"podSelector":{},"policyTypes":["Ingress"]}))["policy"]
+            .clone();
+        let allow = query(
+            serde_json::json!({"podSelector":{},"ingress":[{"ports":[{"port":443}]}]}),
+        )["policy"]
+            .clone();
+        let other = query(
+            serde_json::json!({"podSelector":{"matchLabels":{"role":"other"}},"ingress":[{}]}),
+        )["policy"]
+            .clone();
+        let egress = query(
+            serde_json::json!({"podSelector":{},"policyTypes":["Egress"],"egress":[{}]}),
+        )["policy"]
+            .clone();
+        let mut q = query(serde_json::json!({"podSelector":{}}));
+        q["policy"] = serde_json::json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicyList","items":[deny,other,egress]});
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["policy"]["items"].as_array_mut().unwrap().push(allow);
+        assert_eq!(evaluate(&q).unwrap(), "allowed");
+        q["port"] = 444.into();
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["policy"]["metadata"] = serde_json::json!({"continue":"next-page"});
+        assert!(evaluate(&q).is_err());
+        q["policy"]["metadata"] = serde_json::json!({"continue":""});
+        q["policy"]["items"] = serde_json::json!([]);
+        assert_eq!(evaluate(&q).unwrap(), "not_selected");
+        q["policy"]["items"] = serde_json::json!([{"kind":"Other"}]);
+        assert!(evaluate(&q).is_err());
     }
     #[test]
     fn compiled_policy_owns_immutable_candidate_and_reuses_decisions() {
