@@ -149,3 +149,13 @@ syntax in both matchLabels and matchExpressions. The offline selector check now
 includes syntax validation. Policy collection, address materialization and runtime
 NetworkPolicy integration remain open. Earlier syntax-deferred notes describe
 previous gates and are superseded by this adapter validation.
+
+## Actual Kubernetes selector syntax compatibility
+
+Owned Kubernetes v1.37 server dry-run exposed an overly strict DNS-component
+length check in the adapter. Removed that check while retaining the API's total
+253-byte prefix bound. The maintained `tools/kubernetes_selector_qualification.py`
+compares 12 accepted/rejected syntax boundary cases against the actual API and the
+real Sumunjang offline command; all agree. Kubernetes objects are dry-run only,
+not persisted. Server selector tests and strict clippy pass. This qualification
+covers selector syntax, not collection, reconciliation or NetworkPolicy execution.

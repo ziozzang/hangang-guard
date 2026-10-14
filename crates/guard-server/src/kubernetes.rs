@@ -43,7 +43,6 @@ fn label_key(value: &str) -> bool {
                 && prefix.split('.').all(|part| {
                     let bytes = part.as_bytes();
                     !bytes.is_empty()
-                        && bytes.len() <= 63
                         && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
                         && (bytes[bytes.len() - 1].is_ascii_lowercase()
                             || bytes[bytes.len() - 1].is_ascii_digit())
@@ -115,6 +114,9 @@ mod tests {
         ] {
             assert!(!label_key(key));
         }
+        assert!(label_key(&format!("{}/role", "a".repeat(64))));
+        assert!(label_key(&format!("{}/role", "a".repeat(253))));
+        assert!(!label_key(&format!("{}/role", "a".repeat(254))));
         assert!(label_key(&"a".repeat(63)));
         assert!(!label_key(&"a".repeat(64)));
         for value in ["", "Client_1", "a.b-c"] {
