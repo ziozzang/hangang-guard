@@ -721,9 +721,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     if let Some(path) = &args.check_kubernetes_selector {
         kubernetes::compile_selector(&read_bounded(path, 65536)?)?;
-        println!(
-            "Kubernetes selector shape and predicate bounds: valid (label syntax not qualified)"
-        );
+        println!("Kubernetes selector shape, label syntax and predicate bounds: valid");
         return Ok(());
     }
     if args.about {

@@ -139,3 +139,13 @@ null maps, invalid operator/value cardinality and oversized inputs are refused.
 This validates shape and predicate bounds, not complete Kubernetes label syntax.
 API collection, NetworkPolicy parsing, UID/freshness fencing and request-context
 integration remain open; no production policy is activated by this command.
+
+## Kubernetes selector label syntax
+
+The server adapter now validates label names and values (ASCII alphanumeric
+boundaries, internal dash/underscore/dot, 63-byte bounds, empty values allowed),
+and optional lowercase DNS prefixes with total 253-byte bounds. It rejects invalid
+syntax in both matchLabels and matchExpressions. The offline selector check now
+includes syntax validation. Policy collection, address materialization and runtime
+NetworkPolicy integration remain open. Earlier syntax-deferred notes describe
+previous gates and are superseded by this adapter validation.

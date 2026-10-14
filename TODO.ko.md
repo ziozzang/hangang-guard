@@ -144,3 +144,12 @@ namespaceSelector가 없으면 podSelector는 정책의 Namespace 안에서만 �
 DB·리스너 없이 실행됩니다. 검증 범위는 구조·조건 용량이며 K8s 라벨 문법 전체는
 아닙니다. API 수집·NetworkPolicy 파싱·UID/신선도 보호·요청 문맥 연결은 남았고
 이 명령이 운영 정책을 활성화하지는 않습니다.
+
+## K8s 선택자 라벨 문법
+
+서버 어댑터에서 라벨 이름·값의 ASCII 영숫자 경계, 내부 dash/underscore/dot,
+63바이트 제한과 빈 값 허용을 검증합니다. 선택적 소문자 DNS 접두사는 전체
+253바이트로 제한합니다. matchLabels와 matchExpressions 모두 잘못된 문법을
+거부하며 오프라인 선택자 검사에도 포함됩니다. 정책 수집·주소 구체화·실행 중
+NetworkPolicy 연결은 남아 있습니다. 이전 문법 검증 유보 기록은 과거 상태이며
+이번 서버 어댑터 검증으로 대체합니다.
