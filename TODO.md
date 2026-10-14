@@ -377,3 +377,14 @@ CSP; the verifier now supplies a function without weakening CSP. Production
 Kubernetes source remains unconfigured, and diagnostic results are not enforcement.
 Public release tags and GitHub Actions were not changed. These successful gates
 supersede the earlier unresolved rollout status, not its factual failure record.
+
+## Compilation freshness boundary
+
+SourceSnapshot construction now refuses a candidate whose synchronous compilation
+finishes at/after the one-second collection-start deadline. Tokio timeout alone
+cannot interrupt synchronous compilation; follower publication already checked
+expiry, but the one-shot observer could previously report a stale candidate as a
+successful observation. Both paths now share the checked constructor. A late
+completion regression and all ten Kubernetes adapter tests pass; strict clippy
+passes. This prevents late authority creation rather than claiming preemptible
+CPU work. Production diagnostic binary is unchanged pending rollout qualification.

@@ -404,6 +404,15 @@ mod tests {
         evaluate_policy(&serde_json::to_vec(value)?)
     }
     #[test]
+    fn late_synchronous_compilation_cannot_create_source_snapshot() {
+        let source = query(serde_json::json!({"podSelector":{},"ingress":[{}]}));
+        let compile = || CompiledPolicySet::compile(&source["policy"]).unwrap();
+        let now = std::time::Instant::now();
+        assert!(SourceSnapshot::from_collection(compile(), "opaque".into(), now).is_ok());
+        let old = now.checked_sub(std::time::Duration::from_secs(2)).unwrap();
+        assert!(SourceSnapshot::from_collection(compile(), "opaque".into(), old).is_err());
+    }
+    #[test]
     fn source_snapshot_expiry_fences_retained_candidate() {
         let source = query(serde_json::json!({"podSelector":{},"ingress":[{}]}));
         let mut snapshot = SourceSnapshot {
@@ -787,11 +796,7 @@ async fn collect_source(bytes: &[u8]) -> Result<SourceSnapshot> {
             if continuation.is_empty() {
                 let list = serde_json::json!({"kind":"NetworkPolicyList","apiVersion":"networking.k8s.io/v1","metadata":{"resourceVersion":revision,"continue":""},"items":items});
                 let compiled = CompiledPolicySet::compile(&list)?;
-                return Ok(SourceSnapshot {
-                    compiled,
-                    revision: revision.unwrap(),
-                    expires: started + Duration::from_millis(1000),
-                });
+                return SourceSnapshot::from_collection(compiled, revision.unwrap(), started);
             }
             ensure!(
                 seen.insert(format!("page:{continuation}")),
@@ -821,6 +826,24 @@ pub(crate) struct SourceQuery {
     port: u16,
 }
 impl SourceSnapshot {
+    fn from_collection(
+        compiled: CompiledPolicySet,
+        revision: String,
+        started: std::time::Instant,
+    ) -> Result<Self> {
+        let expires = started
+            .checked_add(std::time::Duration::from_millis(1000))
+            .ok_or_else(|| anyhow::anyhow!("source deadline overflow"))?;
+        ensure!(
+            std::time::Instant::now() < expires,
+            "source compilation exceeded freshness deadline"
+        );
+        Ok(Self {
+            compiled,
+            revision,
+            expires,
+        })
+    }
     pub(crate) fn report(&self) -> serde_json::Value {
         serde_json::json!({"mode":"observe","policies":self.compiled.policies.len(),"resource_version":self.revision,"activated":false,"fresh":std::time::Instant::now()<self.expires})
     }
