@@ -64,9 +64,83 @@ impl LabelSelector {
         self.requirements.iter().all(|r| r.matches(labels))
     }
 }
+/// One NetworkPolicy peer containing selectors. An empty peer is represented
+/// separately as all peers; it must not be mistaken for an empty podSelector.
+#[derive(Clone)]
+pub struct PodPeerSelector {
+    policy_namespace: String,
+    namespace: Option<LabelSelector>,
+    pod: Option<LabelSelector>,
+}
+impl PodPeerSelector {
+    pub fn compile(
+        policy_namespace: String,
+        namespace: Option<LabelSelector>,
+        pod: Option<LabelSelector>,
+    ) -> Result<Self> {
+        ensure!(
+            !policy_namespace.is_empty() && policy_namespace.len() <= 63,
+            "invalid policy namespace size"
+        );
+        ensure!(
+            namespace.is_some() || pod.is_some(),
+            "empty peer requires explicit all-peer representation"
+        );
+        Ok(Self {
+            policy_namespace,
+            namespace,
+            pod,
+        })
+    }
+    /// Call only for a live, UID-bound Pod and its authoritative Namespace.
+    pub fn matches(
+        &self,
+        pod_namespace: &str,
+        namespace_labels: &BTreeMap<String, String>,
+        pod_labels: &BTreeMap<String, String>,
+    ) -> bool {
+        let namespace_matches = match &self.namespace {
+            Some(selector) => selector.matches(namespace_labels),
+            None => pod_namespace == self.policy_namespace,
+        };
+        namespace_matches && self.pod.as_ref().is_none_or(|s| s.matches(pod_labels))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn namespace_and_pod_selectors_intersect_with_local_namespace_default() {
+        let ns = LabelSelector::compile(vec![
+            Requirement::new("team".into(), Operator::In, vec!["blue".into()]).unwrap(),
+        ])
+        .unwrap();
+        let pod = LabelSelector::compile(vec![
+            Requirement::new("role".into(), Operator::In, vec!["client".into()]).unwrap(),
+        ])
+        .unwrap();
+        let blue = BTreeMap::from([("team".into(), "blue".into())]);
+        let client = BTreeMap::from([("role".into(), "client".into())]);
+        let empty = BTreeMap::new();
+        let both =
+            PodPeerSelector::compile("local".into(), Some(ns.clone()), Some(pod.clone())).unwrap();
+        assert!(both.matches("remote", &blue, &client));
+        assert!(!both.matches("remote", &blue, &empty));
+        assert!(!both.matches("local", &empty, &client));
+        let local = PodPeerSelector::compile("local".into(), None, Some(pod)).unwrap();
+        assert!(local.matches("local", &empty, &client));
+        assert!(!local.matches("remote", &blue, &client));
+        let namespace = PodPeerSelector::compile("local".into(), Some(ns), None).unwrap();
+        assert!(namespace.matches("remote", &blue, &empty));
+        let all = LabelSelector::compile(vec![]).unwrap();
+        let local_all = PodPeerSelector::compile("local".into(), None, Some(all.clone())).unwrap();
+        assert!(!local_all.matches("remote", &blue, &client));
+        let global_all = PodPeerSelector::compile("local".into(), Some(all), None).unwrap();
+        assert!(global_all.matches("remote", &empty, &empty));
+        assert!(PodPeerSelector::compile("local".into(), None, None).is_err());
+    }
+
     #[test]
     fn absent_labels_and_empty_values_are_distinct() {
         let absent = BTreeMap::new();

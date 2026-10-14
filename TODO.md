@@ -117,3 +117,15 @@ and capacity; Kubernetes label syntax remains the API adapter's responsibility.
 Apply only to authoritative labels, never request headers. Namespace scope,
 combined namespace/Pod selector resolution, source snapshot consistency and server
 integration remain open. Reference: [Kubernetes labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/).
+
+## Namespace and Pod peer selector composition
+
+`PodPeerSelector` composes namespaceSelector and podSelector with AND semantics.
+Without namespaceSelector, podSelector stays in the policy namespace; an empty
+namespaceSelector selects all namespaces, while an empty podSelector alone stays
+local. Both selectors absent is rejected by this constructor: the adapter must
+represent the all-peer case explicitly. Evaluate only authoritative live Pod and
+Namespace facts, with source cluster/UID/freshness fencing still owned by the
+adapter. API parsing, selector-to-address materialization and server enforcement
+remain open. Core tests cover combined versus separate selectors and empty/absent
+scope distinctions. Reference: [NetworkPolicy selectors](https://kubernetes.io/docs/concepts/services-networking/network-policies/#behavior-of-to-and-from-selectors).

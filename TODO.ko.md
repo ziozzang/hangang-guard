@@ -123,3 +123,15 @@ matchLabels는 단일 값 In 조건으로 변환할 수 있습니다. 생성자�
 아닌 원천 라벨에만 적용해야 합니다. Namespace 범위, Namespace/Pod 선택자의
 결합 해석, 원천 스냅샷 일관성과 서버 연결은 남아 있습니다.
 참조: [Kubernetes labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/).
+
+## Namespace·Pod peer 선택자 결합
+
+`PodPeerSelector`는 namespaceSelector와 podSelector를 AND로 결합합니다.
+namespaceSelector가 없으면 podSelector는 정책의 Namespace 안에서만 적용됩니다.
+빈 namespaceSelector는 모든 Namespace를 선택하지만 빈 podSelector만 있으면
+같은 Namespace로 제한됩니다. 둘 다 없는 경우 생성자가 거부하므로 어댑터가
+전체 peer를 명시적으로 표현해야 합니다. 실제 원천의 살아 있는 Pod·Namespace
+사실에만 적용하며 클러스터·UID·신선도 보호는 어댑터 책임입니다. API 파싱,
+선택자에서 주소로의 구체화 및 서버 집행은 남아 있습니다. 코어 테스트는 결합
+선택자와 빈 값·없음의 범위 차이를 검증합니다.
+참조: [NetworkPolicy selectors](https://kubernetes.io/docs/concepts/services-networking/network-policies/#behavior-of-to-and-from-selectors).
