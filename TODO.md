@@ -306,3 +306,17 @@ All 30 server tests and strict clippy pass; 18 owned TLS cases and actual
 The continuous HTTP follower still needs live process/expiry/failure recovery
 qualification and console integration. Conservative withdrawal creates temporary
 unavailability during collection and is not watch continuity or high availability.
+
+## Live source follower qualification
+
+The maintained real-cluster source smoke now starts an owned Sumunjang server
+with a private temporary SQLite DB and loopback management listener. Its
+admin-authenticated diagnostic evaluation returns denied from 129 source policies.
+An invalid admin credential returns 401. Atomic source-config replacement selects
+an invalid token reference; after the previous one-second window, repeated queries
+return 503 for the entire sampled failure interval. Restoring the valid reference
+republishes a verified denied candidate. The server is terminated and its owned
+namespace cleaned up. The same run preserves pagination/deletion/recreation/RBAC
+gates. This verifies conservative follower withdrawal and recovery, not immediate
+remote revocation, continuous watch availability, native request enforcement or
+production deployment. Actual token/CA material rotation still needs qualification.

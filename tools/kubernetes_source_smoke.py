@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned Kubernetes read-only source qualification; cleans its own namespace."""
-import argparse, base64, json, os, secrets, subprocess, tempfile
+import argparse, base64, json, os, secrets, subprocess, tempfile, socket, time, urllib.request, urllib.error
 from pathlib import Path
 
 def main():
@@ -60,7 +60,47 @@ def main():
             if observe('owned-invalid-token').returncode==0:raise RuntimeError('invalid token accepted')
             config['namespace']='default';path.write_text(json.dumps(config))
             if observe(token).returncode==0:raise RuntimeError('namespace RBAC boundary bypass')
-        print('PASS: actual namespaced CA-pinned 129-policy pagination, deletion/UID recreation, invalid-token refusal and RBAC boundary; no activation')
+            config['namespace']=namespace;path.write_text(json.dumps(config))
+            admin=secrets.token_hex(32);collector=secrets.token_hex(32)
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
+            with (root/'server.log').open('wb') as log:
+                process=subprocess.Popen([binary,'--listen','127.0.0.1:'+str(port),'--database',str(root/'server.sqlite3'),'--kubernetes-policy-source',str(path)],
+                    env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token,OWNED_SUM_BAD_TOKEN='owned-invalid-token',HANGANG_GUARD_ADMIN_TOKEN=admin,HANGANG_GUARD_COLLECTOR_TOKEN=collector),stdout=log,stderr=log)
+                try:
+                    def call(endpoint,credential=admin,body=None):
+                        request=urllib.request.Request('http://127.0.0.1:'+str(port)+endpoint,
+                            headers={'Authorization':'Bearer '+credential,'Content-Type':'application/json'},
+                            data=None if body is None else json.dumps(body).encode())
+                        try:
+                            with urllib.request.urlopen(request,timeout=1) as response:return response.status,json.load(response)
+                        except urllib.error.HTTPError as error:return error.code,json.load(error)
+                    query={'namespace':namespace,'labels':{},'direction':'Ingress','peer':'192.0.2.1','protocol':'TCP','port':443}
+                    def wait_for_decision():
+                        deadline=time.monotonic()+5
+                        while time.monotonic()<deadline:
+                            if process.poll() is not None:raise RuntimeError('owned follower server exited')
+                            try:
+                                status,body=call('/v1/kubernetes/evaluate',body=query)
+                                if status==200 and body.get('decision')=='denied' and body.get('activated') is False:return
+                            except OSError:pass
+                            time.sleep(.05)
+                        raise RuntimeError('owned follower did not publish diagnostic candidate')
+                    wait_for_decision()
+                    if call('/v1/kubernetes/status',credential='owned-invalid-admin')[0]!=401:raise RuntimeError('follower admin authentication bypass')
+                    config['token_env']='OWNED_SUM_BAD_TOKEN'
+                    replacement=root/'replacement.json';replacement.write_text(json.dumps(config));replacement.replace(path)
+                    time.sleep(1.1)
+                    for _ in range(8):
+                        if call('/v1/kubernetes/evaluate',body=query)[0]!=503:raise RuntimeError('follower retained authority after source failure')
+                        time.sleep(.1)
+                    config['token_env']='OWNED_SUM_SOURCE_TOKEN';replacement.write_text(json.dumps(config));replacement.replace(path)
+                    wait_for_decision()
+                finally:
+                    process.terminate()
+                    try:process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+        print('PASS: actual namespaced CA-pinned 129-policy pagination, deletion/UID recreation, invalid-token/RBAC refusal and live follower withdrawal/recovery/admin boundary; no activation')
     finally:
         kubectl('delete','namespace',namespace,'--wait=false')
 if __name__=='__main__':main()
