@@ -84,10 +84,10 @@ pub fn resolve(
             namespace.uid == pod.namespace_uid,
             "namespace UID association changed"
         );
-        if pod.deleting {
-            continue;
-        }
-        let matches = selector.matches(&pod.namespace, &namespace.labels, &pod.labels);
+        // Deleting Pods grant nothing, but their addresses still fence ambiguous
+        // reuse until the source assembler establishes a coherent replacement.
+        let matches =
+            !pod.deleting && selector.matches(&pod.namespace, &namespace.labels, &pod.labels);
         if pod.host_network {
             ensure!(
                 !matches,
@@ -135,6 +135,21 @@ mod tests {
             deleting: false,
             host_network: false,
         }
+    }
+    #[test]
+    fn deleting_and_replacement_addresses_cannot_be_combined() {
+        let selector = PodPeerSelector::compile(
+            "blue".into(),
+            None,
+            Some(LabelSelector::compile(vec![]).unwrap()),
+        )
+        .unwrap();
+        let mut old = pod();
+        old.deleting = true;
+        let mut new = pod();
+        new.name = "new-worker".into();
+        new.uid = "pod-2".into();
+        assert!(resolve(&selector, &[namespace()], &[old, new]).is_err());
     }
     #[test]
     fn ambiguous_addresses_and_duplicate_identity_refuse_materialization() {

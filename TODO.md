@@ -548,3 +548,17 @@ completeness, freshness and coherent lifecycle before supplying these facts. IP
 membership is not authentication. All 32 core tests and strict clippy pass. Actual
 API fact collection, cross-resource reconcile fences, named ports and enforcement
 remain required. Production remains unchanged.
+
+## Pod address reuse uncertainty and functional test priority
+
+Deleting normal Pods contribute no peer grants but their reported addresses still
+participate in ambiguity validation. A deleting Pod and a different live Pod with
+the same canonical address refuse the candidate until coherent replacement facts
+are supplied. All 33 core tests and strict clippy pass. Runtime API assembly and
+actual enforcement remain open; production is unchanged.
+
+The user clarified that the newly available remote Kubernetes environment is for
+functional/integration qualification first. Prioritize actual resource ingestion,
+identity/permission boundaries, withdrawal, lifecycle recovery and console flows.
+Do not expand the current remote test work into load benchmarks or require extra
+physical servers/load generators. Long-term throughput requirements remain separate.
