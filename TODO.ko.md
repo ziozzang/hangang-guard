@@ -265,3 +265,12 @@ Namespace 원천 수집에서 이름·UID·개별 resourceVersion이 비어 있�
 revision과 같을 필요는 없습니다. 이름/revision 누락·이름 중복을 포함한 자체 TLS
 18개 사례, 실제 K8s 원천/인증/RBAC smoke와 Clippy가 통과했습니다. 여러 리소스의
 원자성이나 지속적인 원천 소유권을 입증한 것은 아닙니다.
+
+## 실제 K8s pagination·정책 수명주기
+
+원천 smoke가 자체 정책 129개를 생성하고 실제 API의 첫 128항목 응답에 continuation
+토큰이 있는지 확인합니다. 관찰 명령은 129개 전체를 컴파일했습니다. 정책 삭제 후
+독립적인 다음 수집은 128개, 같은 이름 재생성 후에는 다른 실제 UID와 변경된
+collection revision으로 129개를 보고했습니다. 잘못된 자격·Namespace RBAC
+검사도 통과했고 자체 Namespace는 삭제했습니다. 독립적 재수집 검증이며 연속
+watch·요청 중 회수·129개 정책의 처리량 검증은 아닙니다.

@@ -277,3 +277,13 @@ Individual object revisions need not equal the collection revision. The owned TL
 fixture covers missing names/revisions and duplicate names; all 18 cases pass.
 Actual Kubernetes source/authentication/RBAC smoke and strict clippy also pass.
 This does not establish cross-resource atomicity or persistent source ownership.
+
+## Actual Kubernetes pagination and policy lifecycle
+
+The maintained source smoke creates 129 owned policies and verifies the actual
+API's first 128-item response carries a continuation token. The observer compiles
+all 129. Deleting a policy produces 128 on the next independent collection;
+same-name recreation has a different live UID and returns 129 with a changed
+opaque collection revision. Invalid credential and namespace RBAC cases still
+pass, and the owned namespace is deleted. This qualifies independent recollection,
+not continuous watches, request-time withdrawal or 129-policy throughput.

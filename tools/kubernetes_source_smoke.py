@@ -34,10 +34,33 @@ def main():
             if result.returncode:raise RuntimeError('owned authenticated source compilation failed')
             report=json.loads(result.stdout)
             if report.get('policies')!=1 or report.get('activated') is not False:raise RuntimeError('source report mismatch')
+            extra=[{'apiVersion':'networking.k8s.io/v1','kind':'NetworkPolicy',
+                    'metadata':{'name':'page-policy-'+str(index),'namespace':namespace},
+                    'spec':{'podSelector':{},'policyTypes':['Ingress']}} for index in range(128)]
+            kubectl('create','-f','-',document={'apiVersion':'v1','kind':'List','items':extra})
+            page=json.loads(kubectl('get','--raw','/apis/networking.k8s.io/v1/namespaces/'+namespace+'/networkpolicies?limit=128'))
+            if len(page.get('items',[]))!=128 or not page.get('metadata',{}).get('continue'):
+                raise RuntimeError('owned API pagination was not exercised')
+            result=observe(token)
+            if result.returncode or json.loads(result.stdout).get('policies')!=129:
+                raise RuntimeError('actual complete paginated collection failed')
+            paginated_revision=json.loads(result.stdout)['resource_version']
+            old=json.loads(kubectl('get','networkpolicy','default-deny','-n',namespace,'-o','json'))
+            kubectl('delete','networkpolicy','default-deny','-n',namespace)
+            result=observe(token)
+            if result.returncode or json.loads(result.stdout).get('policies')!=128:
+                raise RuntimeError('policy deletion missing from next collection')
+            kubectl('create','-f','-',document=objects[-1])
+            new=json.loads(kubectl('get','networkpolicy','default-deny','-n',namespace,'-o','json'))
+            if old['metadata']['uid']==new['metadata']['uid']:
+                raise RuntimeError('owned policy UID did not change on recreation')
+            result=observe(token)
+            if result.returncode or json.loads(result.stdout).get('policies')!=129 or json.loads(result.stdout).get('resource_version')==paginated_revision:
+                raise RuntimeError('policy recreation missing from next collection')
             if observe('owned-invalid-token').returncode==0:raise RuntimeError('invalid token accepted')
             config['namespace']='default';path.write_text(json.dumps(config))
             if observe(token).returncode==0:raise RuntimeError('namespace RBAC boundary bypass')
-        print('PASS: actual namespaced CA-pinned source collection/compilation, invalid-token refusal and RBAC boundary; no activation')
+        print('PASS: actual namespaced CA-pinned 129-policy pagination, deletion/UID recreation, invalid-token refusal and RBAC boundary; no activation')
     finally:
         kubectl('delete','namespace',namespace,'--wait=false')
 if __name__=='__main__':main()
