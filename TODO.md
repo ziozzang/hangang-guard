@@ -258,3 +258,12 @@ stable opaque resourceVersion, distinct UIDs and a continuation token containing
 reports exactly two compiled policies after exactly two requests. All 14 source
 cases pass, including previously qualified uncertainty refusal. This verifies
 complete page assembly and URL encoding, not source publication/watch continuity.
+
+## Source CA boundary qualification
+
+The maintained owned TLS fixture now generates an unrelated CA and confirms the
+actual source observer rejects the server when configured with it. The TLS peer
+receives zero HTTP requests, so its bearer does not cross an untrusted TLS channel.
+Restoring the intended CA permits the subsequent valid pagination case. All 15
+source cases pass. This checks fresh-process CA configuration; live key/CA rotation
+and persistent transport pool replacement remain unqualified.

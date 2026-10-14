@@ -13,6 +13,7 @@ def main():
         root=Path(root)
         def openssl(*arguments):subprocess.run(['openssl',*arguments],cwd=root,check=True,capture_output=True)
         openssl('req','-x509','-newkey','rsa:2048','-nodes','-keyout','ca.key','-out','ca.pem','-days','1','-subj','/CN=Owned source CA','-addext','basicConstraints=critical,CA:TRUE')
+        openssl('req','-x509','-newkey','rsa:2048','-nodes','-keyout','wrong-ca.key','-out','wrong-ca.pem','-days','1','-subj','/CN=Owned unrelated CA','-addext','basicConstraints=critical,CA:TRUE')
         openssl('req','-new','-newkey','rsa:2048','-nodes','-keyout','server.key','-out','server.csr','-subj','/CN=Owned source')
         (root/'extensions').write_text('basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n')
         openssl('x509','-req','-in','server.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-days','1','-extfile','extensions','-out','server.pem')
@@ -57,9 +58,12 @@ def main():
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             config=root/'source.json';config.write_text(json.dumps({'api':'https://127.0.0.1:'+str(server.server_port),'namespace':'owned','ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}))
-            cases=['valid','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
+            cases=['valid','wrong-ca','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
             for case in cases:
                 mode=case;requests.clear();started=time.monotonic()
+                source=json.loads(config.read_text())
+                source['ca']=str(root/('wrong-ca.pem' if case=='wrong-ca' else 'ca.pem'))
+                config.write_text(json.dumps(source))
                 result=subprocess.run([binary,'--observe-kubernetes-policy',str(config)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token),text=True,capture_output=True,timeout=5)
                 elapsed=time.monotonic()-started
                 if token in result.stdout+result.stderr:raise RuntimeError('source credential exposed')
@@ -71,8 +75,9 @@ def main():
                         if json.loads(result.stdout).get('policies')!=2 or len(requests)!=2:
                             raise RuntimeError('complete pagination or opaque continuation encoding failed')
                 elif result.returncode==0:raise RuntimeError('malformed source accepted: '+case)
+                if case=='wrong-ca' and requests:raise RuntimeError('credential reached untrusted TLS source')
                 if case=='slow' and elapsed>1.2:raise RuntimeError('source deadline exceeded')
                 if case=='redirect' and len(requests)!=1:raise RuntimeError('source redirect followed')
-            print('PASS: 14 owned TLS source cases including complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
+            print('PASS: 15 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()
