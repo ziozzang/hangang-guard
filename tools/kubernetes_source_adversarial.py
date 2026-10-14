@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);args=parser.parse_args()
     binary=str(Path(args.binary).resolve());os.umask(0o077)
-    token=secrets.token_hex(32)
+    token=secrets.token_hex(32);rotated_token=secrets.token_hex(32);accepted_token=token;authenticated=[]
     with tempfile.TemporaryDirectory(prefix='owned-sum-source-tls-') as root:
         root=Path(root)
         def openssl(*arguments):subprocess.run(['openssl',*arguments],cwd=root,check=True,capture_output=True)
@@ -24,8 +24,9 @@ def main():
             def do_GET(self):
                 requests.append(self.path)
                 connections.add(self.client_address)
-                if self.headers.get('Authorization')!='Bearer '+token:
+                if self.headers.get('Authorization')!='Bearer '+accepted_token:
                     self.send_response(401);self.end_headers();return
+                authenticated.append((accepted_token,self.client_address))
                 page=parse_qs(urlsplit(self.path).query).get('continue',[''])[0]
                 policy={'metadata':{'namespace':'owned','uid':'uid-one','name':'policy-one','resourceVersion':'item-rv'},'spec':{'podSelector':{},'policyTypes':['Ingress']}}
                 body={'kind':'NetworkPolicyList','apiVersion':'networking.k8s.io/v1','metadata':{'resourceVersion':'opaque-rv','continue':''},'items':[]}
@@ -93,7 +94,7 @@ def main():
             admin=secrets.token_hex(32)
             with socket.socket()as listener:listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
             with (root/'follower.log').open('wb')as log:
-                process=subprocess.Popen([binary,'--listen','127.0.0.1:'+str(port),'--database',str(root/'follower.sqlite3'),'--kubernetes-policy-source',str(config)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token,HANGANG_GUARD_ADMIN_TOKEN=admin,HANGANG_GUARD_COLLECTOR_TOKEN=secrets.token_hex(32)),stdout=log,stderr=log)
+                process=subprocess.Popen([binary,'--listen','127.0.0.1:'+str(port),'--database',str(root/'follower.sqlite3'),'--kubernetes-policy-source',str(config)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token,OWNED_SUM_ROTATED_TOKEN=rotated_token,OWNED_SUM_BAD_TOKEN='owned-invalid-token',HANGANG_GUARD_ADMIN_TOKEN=admin,HANGANG_GUARD_COLLECTOR_TOKEN=secrets.token_hex(32)),stdout=log,stderr=log)
                 try:
                     def status():
                         request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/v1/kubernetes/status',headers={'Authorization':'Bearer '+admin})
@@ -121,10 +122,36 @@ def main():
                         time.sleep(.05)
                     else:raise RuntimeError('source trust restoration did not recover')
                     if len(connections)<2:raise RuntimeError('changed CA retained old TLS pool')
+                    before=set(connections);accepted_token=rotated_token
+                    source['token_env']='OWNED_SUM_ROTATED_TOKEN';replacement.write_text(json.dumps(source));replacement.replace(config)
+                    deadline=time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        code,body=status()
+                        used={address for credential,address in authenticated if credential==rotated_token}
+                        if code==200 and body.get('fresh') and used:break
+                        time.sleep(.05)
+                    else:raise RuntimeError('rotated source credential did not recover')
+                    if used & before:raise RuntimeError('credential changed without replacing TLS pool')
+                    source['token_env']='OWNED_SUM_BAD_TOKEN';replacement.write_text(json.dumps(source));replacement.replace(config)
+                    time.sleep(1.1)
+                    if status()[0]!=503:raise RuntimeError('invalid rotated credential retained candidate')
+                    before=set(connections)
+                    source['token_env']='OWNED_SUM_ROTATED_TOKEN';replacement.write_text(json.dumps(source));replacement.replace(config)
+                    deadline=time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        code,body=status()
+                        used={address for credential,address in authenticated if credential==rotated_token}
+                        if code==200 and body.get('fresh') and used-before:break
+                        time.sleep(.05)
+                    else:raise RuntimeError('credential failure recovery did not create new authenticated connection')
+
                 finally:
                     process.terminate()
                     try:process.wait(timeout=5)
                     except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
-            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; persistent TLS pool reuse/CA replacement; no activation')
+                output=(root/'follower.log').read_text()
+                if any(secret in output for secret in [token,rotated_token,admin]):
+                    raise RuntimeError('persistent follower exposed credentials')
+            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; persistent TLS pool reuse/CA replacement/credential rotation and recovery; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()

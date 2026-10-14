@@ -441,3 +441,16 @@ restoration succeeds on a new connection. All 18 boundary cases still pass.
 Expected peer disconnect errors are suppressed in the fixture; unexpected errors
 remain visible. Live bearer rotation and sustained collection throughput remain
 separate qualifications. Production retains the prior qualified backend.
+
+## Source bearer rotation and pool recovery qualification
+
+The owned persistent TLS fixture now switches the source to a second declared
+bearer reference while the peer retires the original credential. It records only
+in-memory connection identities for assertions and proves the new credential is
+authenticated on a new connection, not the prior pool. Selecting an invalid
+reference withdraws the candidate; restoring the valid rotated reference recovers
+on another newly authenticated connection. Follower stdout/stderr are checked for
+original/rotated bearer and administrator secrets. These gates and all 18 earlier
+TLS boundary cases pass. This is reference/material switching within one process,
+not Kubernetes Secret watch delivery or mutation of process environment values.
+Production deployment remains unchanged.
