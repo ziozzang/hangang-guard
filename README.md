@@ -153,3 +153,12 @@ qualification, source regression/Clippy and release boundary checks passed.
 All downloaded assets matched originals; pinned signatures, version/target/URL
 bindings and static ELF were independently verified. Internal adoption and
 Kubernetes combined-endpoint qualification remain subsequent gates.
+
+### 0.3.5 Internal adoption — 2026-10-15
+
+Internal deployment passed pinned signature/version/target verification, live
+configuration preflight, private consistent backup, unchanged policy, actual
+HGD1 mTLS and supervised HUP/worker replacement. Existing observe mode remains.
+The installed server and updater target are static musl; no enforcement grants
+were added. Unified Hangang console HTTPS remains available.
+
