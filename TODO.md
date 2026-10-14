@@ -398,3 +398,16 @@ credentials cannot inspect/evaluate Kubernetes policies (401), and authenticated
 admins receive 503 without a candidate. All 32 server tests pass; strict clippy
 passes. The deployed diagnostic binary is unchanged; this source correction and
 compilation-deadline fix await rollout qualification together.
+
+## Freshness fixes internally deployed — 2026-10-14
+
+Sumunjang `df394d9` optimized release passes 18 owned TLS source boundary cases
+and the actual Kubernetes 129-policy pagination/deletion/recreation, authenticated
+follower withdrawal/recovery and admin-boundary smoke. Its backend is now deployed
+internally with prior binary and stopped SQLite backup. Actual Hangang browser
+Kubernetes diagnostics/unconfigured-source refusal, native service API permissions,
+SSO/logout and mTLS HGD1 regressions pass. Console plugin v0.1.2 and registry bytes
+are preserved. Production Kubernetes source remains unconfigured; no release tag
+or GitHub Actions activation changed. This rollout includes compilation-deadline
+refusal and expired diagnostic status refusal. Full network source enforcement,
+selector peer resolution, watch continuity and distributed source ownership remain.
