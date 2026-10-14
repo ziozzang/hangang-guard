@@ -69,14 +69,43 @@ impl PortRange {
     }
 }
 
-/// Empty peers or ports mean all peers or all ports, respectively.
+/// Explicit peer scope. An empty resolved set matches nobody, never everybody.
+#[derive(Clone)]
+pub enum NetworkPeers {
+    All,
+    Resolved(Vec<IpBlock>),
+}
+impl NetworkPeers {
+    fn len(&self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Resolved(peers) => peers.len(),
+        }
+    }
+    fn contains(&self, peer: IpAddr) -> bool {
+        match self {
+            Self::All => true,
+            Self::Resolved(peers) => peers.iter().any(|p| p.contains(peer)),
+        }
+    }
+}
+/// Empty ports mean all ports. Peer wildcard must be represented explicitly.
 #[derive(Clone)]
 pub struct NetworkRule {
-    peers: Vec<IpBlock>,
+    peers: NetworkPeers,
     ports: Vec<PortRange>,
 }
 impl NetworkRule {
+    /// Compatibility constructor for API rules with omitted/empty peer arrays.
     pub fn new(peers: Vec<IpBlock>, ports: Vec<PortRange>) -> Result<Self> {
+        let peers = if peers.is_empty() {
+            NetworkPeers::All
+        } else {
+            NetworkPeers::Resolved(peers)
+        };
+        Self::with_peers(peers, ports)
+    }
+    pub fn with_peers(peers: NetworkPeers, ports: Vec<PortRange>) -> Result<Self> {
         ensure!(
             peers.len() <= 4096 && ports.len() <= 4096,
             "network rule exceeds bound"
@@ -84,7 +113,7 @@ impl NetworkRule {
         Ok(Self { peers, ports })
     }
     fn permits(&self, peer: IpAddr, protocol: Transport, port: u16) -> bool {
-        (self.peers.is_empty() || self.peers.iter().any(|p| p.contains(peer)))
+        self.peers.contains(peer)
             && (self.ports.is_empty()
                 || self
                     .ports
@@ -140,6 +169,24 @@ impl SelectedDirection {
 mod tests {
     use super::*;
 
+    #[test]
+    fn empty_resolved_peer_set_never_becomes_a_wildcard() {
+        let none = NetworkRule::with_peers(NetworkPeers::Resolved(vec![]), vec![]).unwrap();
+        let all = NetworkRule::with_peers(NetworkPeers::All, vec![]).unwrap();
+        let none = SelectedDirection::compile(true, vec![none]).unwrap();
+        let all = SelectedDirection::compile(true, vec![all]).unwrap();
+        for ip in ["192.0.2.1", "2001:db8::1", "::ffff:192.0.2.1"] {
+            let ip = ip.parse().unwrap();
+            assert_eq!(
+                none.decide(ip, Transport::Tcp, 443),
+                NetworkDecision::Denied
+            );
+            assert_eq!(
+                all.decide(ip, Transport::Tcp, 443),
+                NetworkDecision::Allowed
+            );
+        }
+    }
     #[test]
     fn selected_direction_distinguishes_default_deny_and_additive_allow() {
         let ip = "192.0.2.70".parse().unwrap();

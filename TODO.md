@@ -492,3 +492,14 @@ strict clippy and actual 129-policy source/follower lifecycle qualification pass
 This is structural lookup optimization, not a new measured throughput claim.
 Same-namespace selector/rule indexes and contextual enforcement remain open.
 Production retains the previously qualified backend.
+
+## Explicit peer wildcard versus empty resolved set
+
+Core NetworkPeers now distinguishes All from Resolved(addresses). An empty resolved
+set denies all peers; it cannot become a wildcard when a selector resolves to no
+live Pods. NetworkRule::with_peers exposes this explicit form. The compatibility
+constructor retains Kubernetes omitted/empty peer-array semantics for current IP
+rules. IPv4, IPv6 and mapped-IP regressions prove the distinction. All 29 core
+tests, 11 server adapter tests and strict clippy pass. Actual selector materialization
+is still required; this typed foundation does not claim its implementation or
+production enforcement. Production backend remains unchanged.
