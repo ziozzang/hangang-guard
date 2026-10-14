@@ -650,8 +650,54 @@ struct SourceConfig {
     ca: std::path::PathBuf,
     token_env: String,
 }
+struct CachedTransport {
+    ca: Vec<u8>,
+    credential: reqwest::header::HeaderValue,
+    origin: String,
+    client: reqwest::Client,
+}
+#[derive(Default)]
+struct SourceTransport {
+    cached: Option<CachedTransport>,
+}
+impl SourceTransport {
+    fn client(
+        &mut self,
+        ca: &[u8],
+        credential: &reqwest::header::HeaderValue,
+        origin: &str,
+    ) -> Result<reqwest::Client> {
+        if let Some(cached) = &self.cached
+            && cached.ca == ca
+            && cached.credential == *credential
+            && cached.origin == origin
+        {
+            return Ok(cached.client.clone());
+        }
+        // Drop old authority material before constructing its replacement.
+        self.cached = None;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(reqwest::Certificate::from_pem(ca)?)
+            .timeout(std::time::Duration::from_millis(1000))
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(std::time::Duration::from_secs(10))
+            .build()?;
+        let mut credential = credential.clone();
+        credential.set_sensitive(true);
+        self.cached = Some(CachedTransport {
+            ca: ca.to_vec(),
+            credential,
+            origin: origin.to_owned(),
+            client: client.clone(),
+        });
+        Ok(client)
+    }
+}
 /// Read-only collection. Publication and request-time authority are separate gates.
-async fn collect_source(bytes: &[u8]) -> Result<SourceSnapshot> {
+async fn collect_source(bytes: &[u8], transport: &mut SourceTransport) -> Result<SourceSnapshot> {
     let started = std::time::Instant::now();
     use std::time::Duration;
     let source: SourceConfig = serde_json::from_slice(bytes)?;
@@ -695,13 +741,7 @@ async fn collect_source(bytes: &[u8]) -> Result<SourceSnapshot> {
     let mut authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {secret}"))?;
     authorization.set_sensitive(true);
     let ca = crate::read_bounded(&source.ca, 128 * 1024)?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .tls_built_in_root_certs(false)
-        .add_root_certificate(reqwest::Certificate::from_pem(&ca)?)
-        .timeout(Duration::from_millis(1000))
-        .build()?;
+    let client = transport.client(&ca, &authorization, url.as_str())?;
     url.set_path(&format!(
         "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies",
         source.namespace
@@ -889,7 +929,8 @@ impl SourceSnapshot {
     }
 }
 pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
-    Ok(collect_source(bytes).await?.report())
+    let mut transport = SourceTransport::default();
+    Ok(collect_source(bytes, &mut transport).await?.report())
 }
 pub(crate) async fn follow_source(
     path: std::path::PathBuf,
@@ -897,6 +938,7 @@ pub(crate) async fn follow_source(
     phase: std::sync::Arc<std::sync::atomic::AtomicU8>,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) {
+    let mut transport = SourceTransport::default();
     loop {
         if *stop.borrow() {
             break;
@@ -906,7 +948,7 @@ pub(crate) async fn follow_source(
         snapshots.store(None);
         let result = async {
             let bytes = crate::read_bounded(&path, 16384)?;
-            collect_source(&bytes).await
+            collect_source(&bytes, &mut transport).await
         };
         tokio::select! {
             value=result => {
@@ -914,6 +956,7 @@ pub(crate) async fn follow_source(
                     snapshots.store(Some(std::sync::Arc::new(snapshot)));
                     phase.store(2,std::sync::atomic::Ordering::Release);
                 } else {
+                    transport.cached=None;
                     phase.store(3,std::sync::atomic::Ordering::Release);
                 }
             },

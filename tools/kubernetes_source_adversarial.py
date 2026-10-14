@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned TLS source boundary tests. No operational API or credentials involved."""
-import argparse, http.server, json, os, secrets, ssl, subprocess, tempfile, threading, time
+import argparse, http.server, json, os, secrets, ssl, subprocess, tempfile, threading, time, socket, sys, urllib.request, urllib.error
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -17,11 +17,13 @@ def main():
         openssl('req','-new','-newkey','rsa:2048','-nodes','-keyout','server.key','-out','server.csr','-subj','/CN=Owned source')
         (root/'extensions').write_text('basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n')
         openssl('x509','-req','-in','server.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-days','1','-extfile','extensions','-out','server.pem')
-        mode='valid';requests=[]
+        mode='valid';requests=[];connections=set()
         class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version="HTTP/1.1"
             def log_message(self,*args):pass
             def do_GET(self):
                 requests.append(self.path)
+                connections.add(self.client_address)
                 if self.headers.get('Authorization')!='Bearer '+token:
                     self.send_response(401);self.end_headers();return
                 page=parse_qs(urlsplit(self.path).query).get('continue',[''])[0]
@@ -58,7 +60,11 @@ def main():
                 self.end_headers()
                 try:self.wfile.write(payload)
                 except (BrokenPipeError,ConnectionResetError,ssl.SSLError):pass
-        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True
+        class OwnedHTTPServer(http.server.ThreadingHTTPServer):
+            def handle_error(self,request,address):
+                if isinstance(sys.exc_info()[1],(BrokenPipeError,ConnectionResetError,ssl.SSLError)):return
+                super().handle_error(request,address)
+        server=OwnedHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(root/'server.pem',root/'server.key');server.socket=context.wrap_socket(server.socket,server_side=True)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
@@ -83,6 +89,42 @@ def main():
                 if case=='wrong-ca' and requests:raise RuntimeError('credential reached untrusted TLS source')
                 if case=='slow' and elapsed>1.2:raise RuntimeError('source deadline exceeded')
                 if case=='redirect' and len(requests)!=1:raise RuntimeError('source redirect followed')
-            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
+            mode='valid';requests.clear();connections.clear()
+            admin=secrets.token_hex(32)
+            with socket.socket()as listener:listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
+            with (root/'follower.log').open('wb')as log:
+                process=subprocess.Popen([binary,'--listen','127.0.0.1:'+str(port),'--database',str(root/'follower.sqlite3'),'--kubernetes-policy-source',str(config)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token,HANGANG_GUARD_ADMIN_TOKEN=admin,HANGANG_GUARD_COLLECTOR_TOKEN=secrets.token_hex(32)),stdout=log,stderr=log)
+                try:
+                    def status():
+                        request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/v1/kubernetes/status',headers={'Authorization':'Bearer '+admin})
+                        try:
+                            with urllib.request.urlopen(request,timeout=1)as response:return response.status,json.load(response)
+                        except urllib.error.HTTPError as error:return error.code,json.load(error)
+                    deadline=time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        if process.poll() is not None:raise RuntimeError('pooled source follower exited')
+                        try:
+                            code,body=status()
+                            if code==200 and body.get('fresh') and len(requests)>=3:break
+                        except OSError:pass
+                        time.sleep(.05)
+                    else:raise RuntimeError('pooled source cycles not completed')
+                    if len(connections)!=1:raise RuntimeError('unchanged source did not reuse one TLS connection')
+                    source=json.loads(config.read_text());source['ca']=str(root/'wrong-ca.pem');replacement=root/'next.json';replacement.write_text(json.dumps(source));replacement.replace(config)
+                    time.sleep(1.1)
+                    if status()[0]!=503:raise RuntimeError('changed untrusted CA retained source candidate')
+                    source['ca']=str(root/'ca.pem');replacement.write_text(json.dumps(source));replacement.replace(config)
+                    deadline=time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        code,body=status()
+                        if code==200 and body.get('fresh'):break
+                        time.sleep(.05)
+                    else:raise RuntimeError('source trust restoration did not recover')
+                    if len(connections)<2:raise RuntimeError('changed CA retained old TLS pool')
+                finally:
+                    process.terminate()
+                    try:process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
+            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; persistent TLS pool reuse/CA replacement; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()

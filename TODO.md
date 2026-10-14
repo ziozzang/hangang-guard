@@ -424,3 +424,20 @@ sampling checks status/evaluation 503 with failed/collecting state and activated
 false, plus recovery and all earlier source lifecycle gates. Chromium mock-context
 qualification confirms reason display and locale/disposal. Production backend and
 plugin remain at the previous qualified deployment pending rollout of this change.
+
+## Persistent source transport pool
+
+The follower now reuses a pinned reqwest client while actual CA bytes, sensitive
+bearer header and API origin are unchanged. Changed material drops the old pool
+before replacement; any failed/stale collection drops it too. Each cycle still
+rereads bounded config/CA and credential references and fully recollects policy.
+Idle transport is bounded to two connections/origin and ten seconds. This is
+connection reuse, not permission caching or extended snapshot freshness.
+
+All 32 server tests, strict clippy and actual 129-policy follower/RBAC lifecycle
+smoke pass. The owned HTTP/1.1 TLS fixture proves at least three successful cycles
+use exactly one connection; wrong-CA replacement refuses candidate use and trust
+restoration succeeds on a new connection. All 18 boundary cases still pass.
+Expected peer disconnect errors are suppressed in the fixture; unexpected errors
+remain visible. Live bearer rotation and sustained collection throughput remain
+separate qualifications. Production retains the prior qualified backend.
