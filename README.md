@@ -161,4 +161,3 @@ configuration preflight, private consistent backup, unchanged policy, actual
 HGD1 mTLS and supervised HUP/worker replacement. Existing observe mode remains.
 The installed server and updater target are static musl; no enforcement grants
 were added. Unified Hangang console HTTPS remains available.
-

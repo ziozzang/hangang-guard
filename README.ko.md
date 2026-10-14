@@ -145,4 +145,3 @@ endpoint 검증은 다음 단계로 남아 있습니다.
 HGD1 mTLS·감독 HUP/worker 교체를 통과해 내부에 적용했습니다. 기존 observe
 모드를 유지하고 강제 허용을 추가하지 않았습니다. 설치 서버와 updater 대상은
 정적 musl이며 통합 한강 관리자 HTTPS도 정상입니다.
-
