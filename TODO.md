@@ -106,3 +106,14 @@ bounded candidates and needs a measured index before large-policy performance
 claims. No server, native protocol or CNI activation is implied.
 
 Semantics reference: [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+
+## Label selector predicate core
+
+Added bounded conjunctive `LabelSelector`/`Requirement` predicates: In, NotIn,
+Exists and DoesNotExist. NotIn includes absent keys; present empty values remain
+distinct from absence. Empty selectors match all objects. matchLabels can compile
+into singleton In predicates. Constructors validate operator/value cardinality
+and capacity; Kubernetes label syntax remains the API adapter's responsibility.
+Apply only to authoritative labels, never request headers. Namespace scope,
+combined namespace/Pod selector resolution, source snapshot consistency and server
+integration remain open. Reference: [Kubernetes labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/).

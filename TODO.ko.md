@@ -112,3 +112,14 @@ mapped 주소 정규화, strict subnet 검증과 peer별 CIDR 차집합을 지�
 성능을 주장하려면 인덱스와 측정이 필요합니다. 서버·프로토콜·CNI 활성화는 아닙니다.
 
 의미 참조: [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+
+## 라벨 선택자 조건 코어
+
+개수와 값 크기가 제한된 `LabelSelector`/`Requirement`에 In·NotIn·Exists·
+DoesNotExist 및 조건의 AND 평가를 추가했습니다. NotIn은 키가 없는 객체도
+포함하며 빈 값과 키 없음은 구별합니다. 빈 선택자는 모든 객체를 선택합니다.
+matchLabels는 단일 값 In 조건으로 변환할 수 있습니다. 생성자는 연산자별 값
+개수와 용량을 검증하며 K8s 라벨 문법 검증은 API 어댑터 책임입니다. 요청 헤더가
+아닌 원천 라벨에만 적용해야 합니다. Namespace 범위, Namespace/Pod 선택자의
+결합 해석, 원천 스냅샷 일관성과 서버 연결은 남아 있습니다.
+참조: [Kubernetes labels](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/).
