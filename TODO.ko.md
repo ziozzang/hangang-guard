@@ -274,3 +274,19 @@ revision과 같을 필요는 없습니다. 이름/revision 누락·이름 중복
 collection revision으로 129개를 보고했습니다. 잘못된 자격·Namespace RBAC
 검사도 통과했고 자체 Namespace는 삭제했습니다. 독립적 재수집 검증이며 연속
 watch·요청 중 회수·129개 정책의 처리량 검증은 아닙니다.
+
+## 지속적인 진단용 원천 스냅샷
+
+`--kubernetes-policy-source FILE`에 중단 가능한 읽기 전용 follower를 연결했습니다.
+완전한 재수집 전에 진단 후보를 철회하고 검증된 후보를 원자적으로 게시한 뒤
+500ms 후 재수집합니다. 실패하면 후보가 없습니다. 유효기간은 수집 시작에서 1초며
+이전 Arc를 보관해도 조회 전후 만료를 검사합니다. 중단 시 후보를 철회합니다.
+관리 인증이 필요한 `GET /v1/kubernetes/status`와 `POST /v1/kubernetes/evaluate`가
+상태와 원천 기반 진단 결과를 제공합니다. 라벨 입력은 관리자 진단용이며 인증된
+워크로드 근거가 아닙니다. activated는 false로 유지하며 HGD1/한강 집행이나 정책
+권위는 바꾸지 않습니다.
+
+서버 테스트 30개·Clippy·자체 TLS 18개와 실제 129개 정책 수집/삭제/재생성/RBAC
+smoke가 새 빌드로 통과했습니다. 지속 HTTP follower의 실제 프로세스·만료·장애
+복구 검증과 콘솔 연결은 남아 있습니다. 수집 중 후보 철회로 잠시 unavailable이
+될 수 있으며 watch 연속성이나 고가용성을 구현한 것은 아닙니다.

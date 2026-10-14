@@ -43,6 +43,9 @@ struct Args {
     /// Read and compile a namespaced Kubernetes policy source without activation.
     #[arg(long)]
     observe_kubernetes_policy: Option<PathBuf>,
+    /// Continuously collect a read-only policy source for authenticated diagnostics.
+    #[arg(long)]
+    kubernetes_policy_source: Option<PathBuf>,
     /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
     #[arg(long)]
     check: bool,
@@ -112,6 +115,7 @@ struct App {
     admin: Arc<String>,
     update_status: Option<PathBuf>,
     update_request: Option<PathBuf>,
+    network_source: Arc<arc_swap::ArcSwapOption<kubernetes::SourceSnapshot>>,
 }
 impl App {
     fn query<'a>(
@@ -156,6 +160,31 @@ fn authorize(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, Json<V
     } else {
         Ok(())
     }
+}
+async fn network_source_status(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
+    authorize(&headers, &app.admin)?;
+    let snapshot = app
+        .network_source
+        .load_full()
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "source unavailable"))?;
+    Ok(Json(snapshot.report()))
+}
+async fn network_source_evaluate(
+    HttpState(app): HttpState<App>,
+    headers: HeaderMap,
+    Json(query): Json<kubernetes::SourceQuery>,
+) -> ApiResult {
+    authorize(&headers, &app.admin)?;
+    let snapshot = app
+        .network_source
+        .load_full()
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "source unavailable"))?;
+    snapshot.evaluate(query).map(Json).map_err(|_| {
+        error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "source unavailable or query invalid",
+        )
+    })
 }
 fn persist_state(db: &mut Connection, state: &guard_core::State) -> anyhow::Result<()> {
     let encoded = serde_json::to_string(state)?;
@@ -484,6 +513,8 @@ fn router(app: App) -> Router {
         .route("/v1/events", post(events))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/status", get(status))
+        .route("/v1/kubernetes/status", get(network_source_status))
+        .route("/v1/kubernetes/evaluate", post(network_source_evaluate))
         .route("/v1/update/status", get(update_status))
         .route("/v1/update/check", post(update_check))
         .route(
@@ -868,6 +899,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     };
     let geo = geoip::GeoCatalog::load(&geo_paths)?;
     let app = App {
+        network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
         geo: Arc::new(arc_swap::ArcSwap::from_pointee(geo)),
         geo_paths: Arc::new(geo_paths),
         geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -888,6 +920,13 @@ async fn run(args: Args) -> anyhow::Result<()> {
             .flatten(),
     };
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    if let Some(path) = args.kubernetes_policy_source {
+        tokio::spawn(kubernetes::follow_source(
+            path,
+            app.network_source.clone(),
+            stop_rx.clone(),
+        ));
+    }
     let binary_worker = if let Some(address) = args.decision_listen {
         anyhow::ensure!(
             (address.ip().is_loopback() || args.decision_tls_cert.is_some())
@@ -1003,6 +1042,7 @@ mod tests {
         db.execute_batch("CREATE TABLE checkpoint(id INTEGER PRIMARY KEY,body TEXT NOT NULL)")
             .unwrap();
         App {
+            network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
             geo: Arc::new(arc_swap::ArcSwap::from_pointee(geoip::GeoCatalog::default())),
             geo_paths: Arc::new(geoip::GeoPaths::default()),
             geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),

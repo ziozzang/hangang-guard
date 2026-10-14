@@ -404,6 +404,42 @@ mod tests {
         evaluate_policy(&serde_json::to_vec(value)?)
     }
     #[test]
+    fn source_snapshot_expiry_fences_retained_candidate() {
+        let source = query(serde_json::json!({"podSelector":{},"ingress":[{}]}));
+        let mut snapshot = SourceSnapshot {
+            compiled: CompiledPolicySet::compile(&source["policy"]).unwrap(),
+            revision: "opaque".into(),
+            expires: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        };
+        let q = || SourceQuery {
+            namespace: "blue".into(),
+            labels: BTreeMap::new(),
+            direction: "Ingress".into(),
+            peer: "192.0.2.1".into(),
+            protocol: "TCP".into(),
+            port: 443,
+        };
+        assert_eq!(snapshot.evaluate(q()).unwrap()["decision"], "allowed");
+        snapshot.expires = std::time::Instant::now();
+        assert!(snapshot.evaluate(q()).is_err());
+        assert_eq!(snapshot.report()["fresh"], false);
+    }
+    #[tokio::test]
+    async fn stopped_source_follower_withdraws_existing_snapshot() {
+        let source = query(serde_json::json!({"podSelector":{},"ingress":[{}]}));
+        let snapshot = SourceSnapshot {
+            compiled: CompiledPolicySet::compile(&source["policy"]).unwrap(),
+            revision: "opaque".into(),
+            expires: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        };
+        let snapshots = std::sync::Arc::new(arc_swap::ArcSwapOption::new(Some(
+            std::sync::Arc::new(snapshot),
+        )));
+        let (_stop, rx) = tokio::sync::watch::channel(true);
+        follow_source(std::path::PathBuf::from("/unused"), snapshots.clone(), rx).await;
+        assert!(snapshots.load_full().is_none());
+    }
+    #[test]
     fn policy_list_is_additive_without_unselected_or_opposite_direction_bypass() {
         let deny = query(serde_json::json!({"podSelector":{},"policyTypes":["Ingress"]}))["policy"]
             .clone();
@@ -600,7 +636,8 @@ struct SourceConfig {
     token_env: String,
 }
 /// Read-only collection. Publication and request-time authority are separate gates.
-pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
+async fn collect_source(bytes: &[u8]) -> Result<SourceSnapshot> {
+    let started = std::time::Instant::now();
     use std::time::Duration;
     let source: SourceConfig = serde_json::from_slice(bytes)?;
     let mut url = reqwest::Url::parse(&source.api)?;
@@ -750,9 +787,11 @@ pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
             if continuation.is_empty() {
                 let list = serde_json::json!({"kind":"NetworkPolicyList","apiVersion":"networking.k8s.io/v1","metadata":{"resourceVersion":revision,"continue":""},"items":items});
                 let compiled = CompiledPolicySet::compile(&list)?;
-                return Ok(
-                    serde_json::json!({"mode":"observe","policies":compiled.policies.len(),"resource_version":revision,"activated":false}),
-                );
+                return Ok(SourceSnapshot {
+                    compiled,
+                    revision: revision.unwrap(),
+                    expires: started + Duration::from_millis(1000),
+                });
             }
             ensure!(
                 seen.insert(format!("page:{continuation}")),
@@ -764,4 +803,85 @@ pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
     tokio::time::timeout(Duration::from_millis(1000), collection)
         .await
         .map_err(|_| anyhow::anyhow!("source collection deadline"))?
+}
+
+pub(crate) struct SourceSnapshot {
+    compiled: CompiledPolicySet,
+    revision: String,
+    expires: std::time::Instant,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceQuery {
+    namespace: String,
+    labels: BTreeMap<String, String>,
+    direction: String,
+    peer: String,
+    protocol: String,
+    port: u16,
+}
+impl SourceSnapshot {
+    pub(crate) fn report(&self) -> serde_json::Value {
+        serde_json::json!({"mode":"observe","policies":self.compiled.policies.len(),"resource_version":self.revision,"activated":false,"fresh":std::time::Instant::now()<self.expires})
+    }
+    pub(crate) fn evaluate(&self, query: SourceQuery) -> Result<serde_json::Value> {
+        ensure!(
+            std::time::Instant::now() < self.expires,
+            "source snapshot expired"
+        );
+        ensure!(
+            query.labels.len() <= 256
+                && query
+                    .labels
+                    .iter()
+                    .all(|(k, v)| label_key(k) && label_value(v)),
+            "invalid target labels"
+        );
+        let direction = match query.direction.as_str() {
+            "Ingress" => Direction::Ingress,
+            "Egress" => Direction::Egress,
+            _ => anyhow::bail!("invalid direction"),
+        };
+        let decision = self.compiled.decide(
+            &query.namespace,
+            &query.labels,
+            direction,
+            guard_core::canonical_ip(&query.peer)?,
+            transport(&query.protocol)?,
+            query.port,
+        );
+        ensure!(
+            std::time::Instant::now() < self.expires,
+            "source snapshot expired"
+        );
+        Ok(
+            serde_json::json!({"decision":decision,"resource_version":self.revision,"activated":false}),
+        )
+    }
+}
+pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
+    Ok(collect_source(bytes).await?.report())
+}
+pub(crate) async fn follow_source(
+    path: std::path::PathBuf,
+    snapshots: std::sync::Arc<arc_swap::ArcSwapOption<SourceSnapshot>>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) {
+    loop {
+        if *stop.borrow() {
+            break;
+        }
+        // Conservative uncertainty fencing while a complete list is assembled.
+        snapshots.store(None);
+        let result = async {
+            let bytes = crate::read_bounded(&path, 16384)?;
+            collect_source(&bytes).await
+        };
+        tokio::select! {
+            value=result => if let Ok(snapshot)=value && std::time::Instant::now()<snapshot.expires {snapshots.store(Some(std::sync::Arc::new(snapshot)));},
+            _=stop.changed()=>break,
+        }
+        tokio::select! { _=tokio::time::sleep(std::time::Duration::from_millis(500))=>{}, _=stop.changed()=>break }
+    }
+    snapshots.store(None);
 }

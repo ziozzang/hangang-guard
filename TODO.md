@@ -287,3 +287,22 @@ same-name recreation has a different live UID and returns 129 with a changed
 opaque collection revision. Invalid credential and namespace RBAC cases still
 pass, and the owned namespace is deleted. This qualifies independent recollection,
 not continuous watches, request-time withdrawal or 129-policy throughput.
+
+## Continuous diagnostic source snapshots
+
+`--kubernetes-policy-source FILE` now starts a cancellable read-only follower.
+It withdraws the diagnostic snapshot before each complete recollection, atomically
+publishes a validated candidate and sleeps 500 ms between cycles. Failures leave
+no candidate. Snapshot expiry is anchored to collection start plus one second;
+evaluation checks expiry before and after the in-memory decision, including when
+an old Arc is retained. Stop withdraws the candidate. Admin-authenticated
+`GET /v1/kubernetes/status` and `POST /v1/kubernetes/evaluate` expose status and
+source-bound diagnostic decisions; caller-supplied labels are admin diagnostic
+inputs, not authenticated workload evidence. Response activated remains false.
+No native HGD1/Hangang enforcement or policy ownership is changed.
+
+All 30 server tests and strict clippy pass; 18 owned TLS cases and actual
+129-policy collection/deletion/recreation/RBAC smoke pass after rebuilding.
+The continuous HTTP follower still needs live process/expiry/failure recovery
+qualification and console integration. Conservative withdrawal creates temporary
+unavailability during collection and is not watch continuity or high availability.
