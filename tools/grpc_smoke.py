@@ -49,7 +49,14 @@ def main():
         admin, collector = secrets.token_hex(24), secrets.token_hex(24)
         env = dict(os.environ, HANGANG_GUARD_ADMIN_TOKEN=admin, HANGANG_GUARD_COLLECTOR_TOKEN=collector)
         http, native, transport = free_port(), free_port(), free_port()
-        argv = [str(binary), '--supervised', '--listen', f'127.0.0.1:{http}', '--database', str(root/'policy.sqlite3'), '--decision-listen', f'0.0.0.0:{native}', '--grpc-listen', f'0.0.0.0:{transport}', '--decision-tls-cert', str(root/'server.pem'), '--decision-tls-key', str(root/'server.key'), '--decision-client-ca', str(root/'ca.pem')]
+        rejected_bootstrap = root/'invalid-initial.json'
+        rejected_bootstrap.write_text('invalid initial bootstrap')
+        absent_database = root/'not-created.sqlite3'
+        rejected = subprocess.run([str(binary), '--check', '--database', str(absent_database), '--bootstrap-policy', str(rejected_bootstrap)], env=env, capture_output=True)
+        assert rejected.returncode != 0 and not absent_database.exists()
+        bootstrap = root/'bootstrap.json'
+        bootstrap.write_text('{"mode":"observe","allow":["192.0.2.99/32"]}')
+        argv = [str(binary), '--bootstrap-policy', str(bootstrap), '--supervised', '--listen', f'127.0.0.1:{http}', '--database', str(root/'policy.sqlite3'), '--decision-listen', f'0.0.0.0:{native}', '--grpc-listen', f'0.0.0.0:{transport}', '--decision-tls-cert', str(root/'server.pem'), '--decision-tls-key', str(root/'server.key'), '--decision-client-ca', str(root/'ca.pem')]
         def channel(identity='client', hostname='sumunjang.example.test'):
             creds = grpc.ssl_channel_credentials((root/'ca.pem').read_bytes(), (root/f'{identity}.key').read_bytes() if identity else None, (root/f'{identity}.pem').read_bytes() if identity else None)
             return grpc.secure_channel(f'127.0.0.1:{transport}', creds, options=(('grpc.ssl_target_name_override', hostname),))
@@ -83,6 +90,7 @@ def main():
             ch = channel()
             try:
                 eventually(lambda: proc.poll() is None and request(api, '/healthz')[0] == 200, 'server readiness')
+                assert request(api, '/v1/policy', admin)[1]['allow'] == ['192.0.2.99/32']
                 grpc.channel_ready_future(ch).result(timeout=5)
                 stub = rpc.NetworkStub(ch)
                 msg = pb.NetworkRequest(request_id=42, ip=socket.inet_aton('192.0.2.1'))
@@ -108,6 +116,10 @@ def main():
                 unavailable = check()
                 assert (unavailable.verdict, unavailable.mode, unavailable.ttl_ms) == (3, 0, 0)
                 msg.minimum_revision = 0
+                # Durable authority must not reload or parse obsolete bootstrap material.
+                bootstrap.write_text('invalid obsolete bootstrap')
+                accepted = subprocess.run([str(binary), '--check', '--database', str(root/'policy.sqlite3'), '--bootstrap-policy', str(bootstrap)], env=env, capture_output=True)
+                assert accepted.returncode == 0
                 old_children = children(proc.pid)
                 proc.send_signal(signal.SIGHUP)
                 def replaced():

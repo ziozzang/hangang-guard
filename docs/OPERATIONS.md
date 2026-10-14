@@ -79,3 +79,7 @@ State-changing evidence queries have different throughput from ordinary read-onl
 decisions. Measure immutable-view rebuild cost if automatic blocking is frequent.
 Do not assume 100k ordinary decisions/sec and 100k raw attack events/sec fit the
 same resource budget.
+
+## Durable bootstrap policy
+
+Use `--bootstrap-policy /config/bootstrap.json` to seed a new database only. Once a checkpoint exists, its policy is authoritative and the bootstrap file is not read, including after supervised HUP. This is suitable for restartable deployments. `--policy` continues to explicitly reload policy at each start; the two options are mutually exclusive. Bootstrap input is bounded to 1 MiB. Invalid stored state fails startup rather than falling back to bootstrap.

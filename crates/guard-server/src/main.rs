@@ -98,6 +98,9 @@ struct Args {
     database: PathBuf,
     #[arg(long)]
     policy: Option<PathBuf>,
+    /// Import only when no durable checkpoint exists; stored policy remains authoritative.
+    #[arg(long, conflicts_with = "policy")]
+    bootstrap_policy: Option<PathBuf>,
     #[arg(long)]
     asn_catalog: Option<PathBuf>,
     #[arg(long)]
@@ -705,6 +708,7 @@ fn check_configuration(args: &Args) -> anyhow::Result<()> {
             && collector != admin,
         "tokens must be distinct and 16..4096 bytes"
     );
+    let mut fresh_database = true;
     let mut engine = if args.database.exists() {
         let db = Connection::open_with_flags(
             &args.database,
@@ -714,7 +718,10 @@ fn check_configuration(args: &Args) -> anyhow::Result<()> {
             r.get::<_, String>(0)
         });
         match saved {
-            Ok(body) => Engine::restore(serde_json::from_str(&body)?)?,
+            Ok(body) => {
+                fresh_database = false;
+                Engine::restore(serde_json::from_str(&body)?)?
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Engine::new(Policy::default())?,
             Err(e) => return Err(e.into()),
         }
@@ -727,6 +734,9 @@ fn check_configuration(args: &Args) -> anyhow::Result<()> {
         anyhow::ensure!(parent.is_dir(), "database directory does not exist");
         Engine::new(Policy::default())?
     };
+    if fresh_database && let Some(path) = &args.bootstrap_policy {
+        engine.set_policy(serde_json::from_slice(&read_bounded(path, 1024 * 1024)?)?)?;
+    }
     if let Some(path) = &args.policy {
         engine.set_policy(serde_json::from_slice(&read_bounded(
             path,
@@ -916,11 +926,15 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let saved = db.query_row("SELECT body FROM checkpoint WHERE id=1", [], |r| {
         r.get::<_, String>(0)
     });
+    let fresh_database = matches!(saved, Err(rusqlite::Error::QueryReturnedNoRows));
     let mut engine = match saved {
         Ok(body) => Engine::restore(serde_json::from_str(&body)?)?,
         Err(rusqlite::Error::QueryReturnedNoRows) => Engine::new(Policy::default())?,
         Err(e) => return Err(e.into()),
     };
+    if fresh_database && let Some(path) = args.bootstrap_policy {
+        engine.set_policy(serde_json::from_slice(&read_bounded(&path, 1024 * 1024)?)?)?;
+    }
     if let Some(path) = args.policy {
         engine.set_policy(serde_json::from_slice(&std::fs::read(path)?)?)?;
     }
