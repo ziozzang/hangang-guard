@@ -213,3 +213,8 @@ rejects binaries with an ELF interpreter before creating or signing assets.
 Existing GNU installations require a one-time verified musl installation; the
 running musl supervisor then selects its compiled musl target for updates. Do
 not relabel musl assets as GNU or change the signed target to bypass that fence.
+
+Linux amd64 musl supervised updates are qualified with the real static executable:
+signed upgrade, read-only preflight, inherited listeners/HUP, policy retention,
+readiness rollback, signature tamper refusal and cancellation pass. ARM64 musl
+update activation is still unqualified and is not enabled by staging support.

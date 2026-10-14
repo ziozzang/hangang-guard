@@ -246,7 +246,7 @@ async fn stage(
     ensure!(
         matches!(
             target,
-            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu"
+            "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-musl"
         ),
         "signed updates are not qualified for this target"
     );
