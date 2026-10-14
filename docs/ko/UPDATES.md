@@ -128,7 +128,7 @@ metadata만 확인하며 binary를 활성화하지 않습니다. Update 표시 �
 검증한 target의 자산을 오프라인으로 준비합니다.
 
 ```sh
-python3 tools/prepare_release.py --target x86_64-unknown-linux-gnu \
+python3 tools/prepare_release.py --target x86_64-unknown-linux-musl \
   --signing-seed-file /secure/guard-release-seed --output dist
 ```
 
@@ -178,3 +178,9 @@ schema migration 검증을 의미하지 않습니다.
 사용해 GNU 자산과 함께 모아도 덮어쓰지 않습니다. 서명한 원본 파일명과 payload
 대상은 전체 Rust target triple을 유지합니다. 준비 도구 지원과 플랫폼 검증은
 별개이므로 빌드·기능 검증 근거가 있는 자산만 게시합니다.
+
+Linux 릴리즈 준비의 기본은 x86_64-unknown-linux-musl입니다. musl 자산은
+ELF 인터프리터가 있으면 생성·서명 전에 거부합니다. 기존 GNU 설치는 서명과
+대상을 검증한 musl 바이너리로 한 번 전환해야 하며, 이후 감독 실행은 컴파일된
+musl 대상을 자동 업데이트에 사용합니다. musl 자산을 GNU로 이름만 바꾸거나
+서명 대상을 변경해 검증을 우회하지 않습니다.

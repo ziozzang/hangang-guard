@@ -149,7 +149,7 @@ and cannot be accepted as signed updates. The workflow does not publish a
 release. For a qualified target, prepare assets offline:
 
 ```sh
-python3 tools/prepare_release.py --target x86_64-unknown-linux-gnu \
+python3 tools/prepare_release.py --target x86_64-unknown-linux-musl \
   --signing-seed-file /secure/guard-release-seed --output dist
 ```
 
@@ -207,3 +207,9 @@ The release preparer also accepts Linux musl targets. Their archives use
 combined. Signed raw artifact filenames and payload targets retain the complete
 Rust target triple. Supporting staging for a target does not qualify that target;
 publish only artifacts with recorded build and functional verification.
+
+Linux release preparation defaults to x86_64-unknown-linux-musl. Musl staging
+rejects binaries with an ELF interpreter before creating or signing assets.
+Existing GNU installations require a one-time verified musl installation; the
+running musl supervisor then selects its compiled musl target for updates. Do
+not relabel musl assets as GNU or change the signed target to bypass that fence.

@@ -16,7 +16,7 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = "x86_64-unknown-linux-gnu"
+TARGET = "x86_64-unknown-linux-musl"
 COMMON_BINARIES = ("sumunjang", "hangang-guard", "guard-release-sign")
 TARGETS = {
     "x86_64-unknown-linux-musl": ("linux-musl", "amd64", COMMON_BINARIES),
@@ -86,6 +86,10 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
     for name, path in executables.items():
         if not path.is_file() or not path.stat().st_mode & 0o111:
             raise ValueError(f"missing executable release build: {path}")
+    if target.endswith("-musl"):
+        for path in executables.values():
+            if "INTERP" in run(["readelf", "-lW", path]):
+                raise ValueError("musl release must not require a dynamic loader")
     license_file = ROOT / "LICENSE"
     if not license_file.is_file():
         raise ValueError("LICENSE is missing")

@@ -44,6 +44,8 @@ class PreparationTests(unittest.TestCase):
         self.addCleanup(self.patch_run.stop)
 
     def fake_run(self, command):
+        if command[0] == "readelf":
+            return "Program Headers: LOAD"
         if command[1] == "--version":
             return f"{Path(command[0]).name} 0.3.0"
         if command[1] == "--public-key":
@@ -83,6 +85,14 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(payload["sha256"], hashlib.sha256(artifact.read_bytes()).hexdigest())
         self.assertFalse(list(self.output.glob(".release-payload-*")))
         self.assertNotIn(self.seed.read_bytes(), b"".join(p.read_bytes() for p in self.output.iterdir()))
+
+    def test_default_is_static_and_musl_dynamic_loader_is_rejected_before_signing(self):
+        self.assertEqual(release.TARGET, "x86_64-unknown-linux-musl")
+        with patch.object(release, "run", return_value="Program Headers: INTERP"):
+            with self.assertRaisesRegex(ValueError, "dynamic loader"):
+                release.prepare(self.seed, self.output, release.TARGET)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.payloads, [])
 
     def test_musl_and_gnu_assets_can_coexist_without_target_or_archive_collision(self):
         names = set()
