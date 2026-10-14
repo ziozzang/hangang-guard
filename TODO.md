@@ -388,3 +388,13 @@ successful observation. Both paths now share the checked constructor. A late
 completion regression and all ten Kubernetes adapter tests pass; strict clippy
 passes. This prevents late authority creation rather than claiming preemptible
 CPU work. Production diagnostic binary is unchanged pending rollout qualification.
+
+## Diagnostic status freshness and credential boundary
+
+The authenticated Kubernetes status endpoint now returns 503 for an expired
+retained snapshot instead of a successful stale report. In-process source reports
+still carry freshness for diagnostics. HTTP route regressions prove collector
+credentials cannot inspect/evaluate Kubernetes policies (401), and authenticated
+admins receive 503 without a candidate. All 32 server tests pass; strict clippy
+passes. The deployed diagnostic binary is unchanged; this source correction and
+compilation-deadline fix await rollout qualification together.

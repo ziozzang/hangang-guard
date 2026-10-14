@@ -167,7 +167,14 @@ async fn network_source_status(HttpState(app): HttpState<App>, headers: HeaderMa
         .network_source
         .load_full()
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "source unavailable"))?;
-    Ok(Json(snapshot.report()))
+    let report = snapshot.report();
+    if report["fresh"] != true {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "source snapshot expired",
+        ));
+    }
+    Ok(Json(report))
 }
 async fn network_source_evaluate(
     HttpState(app): HttpState<App>,
@@ -1086,6 +1093,37 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    #[tokio::test]
+    async fn kubernetes_diagnostics_require_admin_and_refuse_absent_authority() {
+        let state = app();
+        for (path, method, body) in [
+            ("/v1/kubernetes/status", "GET", json!({})),
+            (
+                "/v1/kubernetes/evaluate",
+                "POST",
+                json!({"namespace":"example","labels":{},"direction":"Ingress","peer":"192.0.2.1","protocol":"TCP","port":443}),
+            ),
+        ] {
+            assert_eq!(
+                request(
+                    state.clone(),
+                    path,
+                    method,
+                    "collector-test-token",
+                    body.clone()
+                )
+                .await
+                .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                request(state.clone(), path, method, "admin-test-token", body)
+                    .await
+                    .0,
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
     }
     #[tokio::test]
     async fn separated_credentials() {
