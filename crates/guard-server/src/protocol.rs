@@ -2,14 +2,12 @@
 use crate::{App, now};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
-    sync::{Semaphore, watch},
-    task::JoinSet,
+    sync::watch,
     time::timeout,
 };
 const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -146,28 +144,41 @@ pub(crate) async fn serve_with_tls(
         tls.is_some() || listener.local_addr()?.ip().is_loopback(),
         "remote native decisions require mTLS"
     );
-    let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
-    let mut clients = JoinSet::new();
-    loop {
-        tokio::select! {
-            _=stop.changed()=>break,
-            accepted=listener.accept()=>{
-                let (stream,peer)=accepted?;
-                if tls.is_none() && !peer.ip().is_loopback(){continue;}
-                if stream.set_nodelay(true).is_err(){continue;}
-                if let Ok(permit)=slots.clone().try_acquire_owned(){let app=app.clone();let tls=tls.clone();clients.spawn(async move {let _permit=permit;if let Some(tls)=tls {if let Ok(Ok(stream))=timeout(Duration::from_secs(3),tls.accept(stream)).await && stream.get_ref().1.alpn_protocol()==Some(b"hgd1".as_slice()){let _=timeout(Duration::from_secs(300),connection(stream,app)).await;}} else {let _=timeout(Duration::from_secs(300),connection(stream,app)).await;}});}
-            },
-            _=clients.join_next(),if !clients.is_empty()=>{},
-        }
-    }
-    clients.abort_all();
-    while clients.join_next().await.is_some() {}
+    hangang_runtime::serve_connections(
+        listener,
+        std::num::NonZeroUsize::new(MAX_CONNECTIONS).unwrap(),
+        Duration::ZERO,
+        move |stream, peer| {
+            let app = app.clone();
+            let tls = tls.clone();
+            async move {
+                if tls.is_none() && !peer.ip().is_loopback() {
+                    return;
+                }
+                if let Some(tls) = tls {
+                    if let Ok(Ok(stream)) =
+                        timeout(Duration::from_secs(3), tls.accept(stream)).await
+                        && stream.get_ref().1.alpn_protocol() == Some(b"hgd1".as_slice())
+                    {
+                        let _ = timeout(Duration::from_secs(300), connection(stream, app)).await;
+                    }
+                } else {
+                    let _ = timeout(Duration::from_secs(300), connection(stream, app)).await;
+                }
+            }
+        },
+        async move {
+            let _ = stop.changed().await;
+        },
+    )
+    .await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,

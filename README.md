@@ -131,3 +131,9 @@ and [design](docs/DESIGN.md) for the delivery procedure.
 Use [Guard in the native Hangang console](docs/CONSOLE.md) with delegated host authentication and a pinned package.
 
 Additional [gRPC decisions](docs/GRPC.md) reuse the shared server runtime; building requires `protoc`.
+
+Native HGD1 uses the pinned hangang-runtime 0.1.2 connection owner, also used
+by management HTTPS. The 256-connection quota, zero shutdown drain, loopback
+restriction without TLS, mTLS/ALPN checks and native decision semantics remain
+unchanged. Connection tasks are owned and cancelled with the listener; supervised
+listener inheritance remains Sumunjang owned and requires its actual HUP gate.
