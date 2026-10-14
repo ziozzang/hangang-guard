@@ -470,3 +470,13 @@ symlink가 아닌 target/debug/incremental만 정리합니다. cargo/rustc 실�
 거부하고 release·운영/자격/롤백 데이터는 유지하며 여유 공간을 보고합니다.
 수문장·품계의 재생성 가능 캐시 약 6GiB를 정리했습니다. 요청대로 큰 빌드 전후에
 주기적으로 사용량을 확인하며 Docker 전체 prune이나 운영 볼륨 삭제는 하지 않습니다.
+
+## 해석된 host peer의 정확한 주소 인덱스
+
+NetworkPeers::hosts가 최대 4096개 원천 주소를 /32 또는 /128 radix 인덱스로
+묶습니다. mapped IPv4를 정규화하고 중복을 합치며 빈 입력은 아무 peer도 허용하지
+않습니다. unspecified·multicast·loopback 주소는 거부합니다. 조회는 할당이나
+전체 host 순차 검사를 하지 않습니다. 신뢰된 주소 해석 결과를 표현하며 IP 인증을
+의미하지 않습니다. 코어 30개 테스트와 Clippy가 통과했습니다. Pod/Namespace
+원천 파싱·UID/수명주기 조정·named port·집행 연결은 남아 있습니다. 정리한 캐시가
+다시 커지지 않도록 이번 검사에서는 incremental 컴파일을 비활성화했습니다.

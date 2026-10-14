@@ -74,18 +74,44 @@ impl PortRange {
 pub enum NetworkPeers {
     All,
     Resolved(Vec<IpBlock>),
+    Hosts(HostAddresses),
+}
+/// Exact addresses materialized by a trusted source adapter, not an identity proof.
+#[derive(Clone)]
+pub struct HostAddresses {
+    index: PrefixTrie<()>,
 }
 impl NetworkPeers {
+    pub fn hosts(addresses: &[IpAddr]) -> Result<Self> {
+        ensure!(addresses.len() <= 4096, "too many resolved host addresses");
+        let mut index = PrefixTrie::default();
+        for address in addresses {
+            let address = match address {
+                IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(*address),
+                _ => *address,
+            };
+            ensure!(
+                !address.is_unspecified() && !address.is_multicast() && !address.is_loopback(),
+                "invalid resolved host address"
+            );
+            let bits = if address.is_ipv4() { 32 } else { 128 };
+            index.insert(IpNet::new(address, bits)?, ());
+        }
+        Ok(Self::Hosts(HostAddresses { index }))
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::All => 0,
             Self::Resolved(peers) => peers.len(),
+            Self::Hosts(hosts) => hosts.index.len(),
         }
     }
     fn contains(&self, peer: IpAddr) -> bool {
         match self {
             Self::All => true,
             Self::Resolved(peers) => peers.iter().any(|p| p.contains(peer)),
+            Self::Hosts(hosts) => hosts.index.longest(peer).is_some(),
         }
     }
 }
@@ -169,6 +195,42 @@ impl SelectedDirection {
 mod tests {
     use super::*;
 
+    #[test]
+    fn resolved_hosts_are_exact_deduplicated_and_empty_means_none() {
+        let addresses =
+            ["192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1"].map(|s| s.parse().unwrap());
+        let peers = NetworkPeers::hosts(&addresses).unwrap();
+        assert_eq!(peers.len(), 2);
+        let view =
+            SelectedDirection::compile(true, vec![NetworkRule::with_peers(peers, vec![]).unwrap()])
+                .unwrap();
+        for address in addresses {
+            assert_eq!(
+                view.decide(address, Transport::Tcp, 443),
+                NetworkDecision::Allowed
+            );
+        }
+        for address in ["192.0.2.2", "2001:db8::2"] {
+            assert_eq!(
+                view.decide(address.parse().unwrap(), Transport::Tcp, 443),
+                NetworkDecision::Denied
+            );
+        }
+        let empty = NetworkPeers::hosts(&[]).unwrap();
+        assert!(!empty.contains("192.0.2.1".parse().unwrap()));
+        for address in [
+            "0.0.0.0",
+            "::",
+            "127.0.0.1",
+            "::1",
+            "224.0.0.1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(NetworkPeers::hosts(&[address.parse().unwrap()]).is_err());
+        }
+        assert!(NetworkPeers::hosts(&vec!["192.0.2.1".parse().unwrap(); 4097]).is_err());
+    }
     #[test]
     fn empty_resolved_peer_set_never_becomes_a_wildcard() {
         let none = NetworkRule::with_peers(NetworkPeers::Resolved(vec![]), vec![]).unwrap();

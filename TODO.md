@@ -524,3 +524,14 @@ runtime/state/credential/rollback data, and reports free space. About 6 GiB of
 reproducible Sumunjang/Pumgye incremental caches were removed. Check disk usage
 before/after substantial builds periodically as requested; do not globally prune
 Docker or operational volumes.
+
+## Exact resolved-host peer index
+
+Core NetworkPeers::hosts builds an exact /32 or /128 radix index from at most
+4096 source addresses. Mapped IPv4 canonicalizes and duplicates coalesce; empty
+input matches nobody. Unspecified, multicast and loopback inputs are refused.
+Lookups allocate nothing and do not scan every host. This represents trusted
+materialization output, not authentication by IP. Thirty core tests and strict
+clippy pass. Pod/Namespace source parsing, UID/lifecycle reconciliation, named
+ports and enforcement integration remain required. Incremental compilation was
+disabled for these checks to avoid rebuilding the recently cleared disk cache.
