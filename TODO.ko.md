@@ -301,3 +301,17 @@ smoke가 새 빌드로 통과했습니다. 지속 HTTP follower의 실제 프로
 완료했고 pagination·삭제/재생성·RBAC 검사도 유지했습니다. 보수적인 후보 철회와
 복구 검증이며 즉시 원격 회수·watch 가용성·네이티브 집행·운영 배포는 아닙니다.
 실제 토큰/CA 재료 회전은 추가 검증이 필요합니다.
+
+## K8s 원천 콘솔 진단
+
+대시보드와 생성되는 한강 플러그인에 K8s 탭·원천 상태·Namespace/peer/방향/프로토콜/
+포트/대상 라벨 진단 폼을 추가했습니다. manifest v0.1.2는 읽기 전용 status/evaluate
+경로만 허용하고 원천 설정·활성화는 노출하지 않습니다. 실패하면 이전 정상 결과를
+대체하며 호스트 언어에 따라 영어/한국어 라벨을 표시합니다. 실제 Chromium에서
+mock context API로 mount·탭·상태·denied 질의·unavailable·한국어 전환·dispose를
+검증했습니다. 같은 문자열로 번역할 때 MutationObserver가 반복되는 문제도 발견해
+변경 없는 텍스트/placeholder는 건너뛰도록 수정했습니다. asset digest를 재생성했습니다.
+
+`tools/kubernetes_plugin_browser.py --chromium /path/to/chromium`으로 재현합니다.
+실제 한강 프록시/원천 통합과 내부 패키지 반영은 남았고 운영 UI/백엔드는 변경하지
+않았습니다.

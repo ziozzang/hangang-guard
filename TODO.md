@@ -320,3 +320,19 @@ namespace cleaned up. The same run preserves pagination/deletion/recreation/RBAC
 gates. This verifies conservative follower withdrawal and recovery, not immediate
 remote revocation, continuous watch availability, native request enforcement or
 production deployment. Actual token/CA material rotation still needs qualification.
+
+## Kubernetes source console diagnostics
+
+Dashboard and generated Hangang console package now include a Kubernetes source
+tab, source status and namespace/peer/direction/protocol/port/target-label diagnostic
+query form. Manifest v0.1.2 permits only read-only status/evaluate routes; source
+configuration and activation are not exposed. Failed reads replace old status or
+results rather than leaving stale success visible. English/Korean labels follow
+the host locale. Actual Chromium qualification covers mount, tab, status, denied
+query, unavailable state, Korean switch and disposal using a mocked context API.
+It also exposed self-translation MutationObserver loops; generation now skips
+unchanged text/placeholder translations. Asset digests are regenerated.
+
+`tools/kubernetes_plugin_browser.py --chromium /path/to/chromium` reproduces this
+browser qualification. Actual Hangang proxy/runtime source integration and internal
+package rollout remain open; production UI/backend are unchanged.

@@ -1,15 +1,25 @@
 {
   "id": "guard",
   "name": "Sumunjang (\uc218\ubb38\uc7a5)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "api_version": 1,
   "entry": "index.js",
   "assets": {
-    "index.js": "641b1260f17980923296bce44951993f1259a992717a95fc65f5d9e32fed75fc",
-    "panel.html": "396a177fcdc6ca6c2dea1d176310a2f57b90af9bccfe0a9c600d7326b7623773",
+    "index.js": "5e69cdc15e8d95755defe3c996da6b8fb2bac8fa5e99a03b5a1a667dcb1defd4",
+    "panel.html": "298d82e9f92aa548b6b19a1a2eb03d0f4b1399e419ad62063a4f1b4ac7e117ea",
     "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
   },
   "routes": [
+    {
+      "path": "kubernetes/status",
+      "method": "GET",
+      "mutation": false
+    },
+    {
+      "path": "kubernetes/evaluate",
+      "method": "POST",
+      "mutation": false
+    },
     {
       "path": "status",
       "method": "GET",
