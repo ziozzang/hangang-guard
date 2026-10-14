@@ -336,3 +336,21 @@ unchanged text/placeholder translations. Asset digests are regenerated.
 `tools/kubernetes_plugin_browser.py --chromium /path/to/chromium` reproduces this
 browser qualification. Actual Hangang proxy/runtime source integration and internal
 package rollout remain open; production UI/backend are unchanged.
+
+## Sumunjang console rollout attempt and rollback — 2026-10-14
+
+The c9b4fb8 release binary passes all 18 owned TLS source boundary cases. Internal
+backend/plugin replacement retained binary, stopped DB and registry backups, but
+the existing whole-chain service probe failed. Both deployment attempts rolled
+back to the previous backend and plugin v0.1.1. Console/backend services are active;
+direct authenticated mTLS HGD1 and actual HTTPS console/SSO/logout isolation pass.
+No Kubernetes production source was enabled.
+
+The owned service-probe credential has expired. Limited six-hour rotations keeping
+the same service identity/scope also failed verification and were rolled back;
+runtime environment readback confirmed the candidate key was delivered, but direct
+Hopae verification returned 401. The cause of rotation refusal remains unresolved.
+The original expired credential/configuration are restored; no production user
+credential was changed. Do not report plugin v0.1.2 as deployed or treat this as a
+qualified new rollout. Next gate is authenticated native/HTTP probe diagnosis and
+verified owned credential rotation before retrying the concrete retained package.
