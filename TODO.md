@@ -354,3 +354,26 @@ The original expired credential/configuration are restored; no production user
 credential was changed. Do not report plugin v0.1.2 as deployed or treat this as a
 qualified new rollout. Next gate is authenticated native/HTTP probe diagnosis and
 verified owned credential rotation before retrying the concrete retained package.
+
+## Corrected credential rotation and completed internal console rollout
+
+Rotation refusal was traced to intended durable authority: authentication profile
+DB publication overrides bootstrap JSON after first activation. File-only expiry
+edits therefore left the durable expired credential policy unchanged. Corrected
+rotation updates the owned probe secret and publishes only its six-hour expiry
+through the authenticated Hangang/Hopae profile editor with revision protection;
+all other durable profile configuration, identity and permission scope are retained.
+Readback matches, direct Hopae verification and gateway API checks pass; the retired
+credential returns 401 while the current credential returns 200. Production user
+credentials were not changed.
+
+The c9b4fb8 Sumunjang backend and digest-pinned console plugin v0.1.2 are now
+internally deployed with previous binary, stopped SQLite and registry backups.
+Actual HTTPS Hangang browser qualification covers the Kubernetes tab, delegated
+status/query proxy and unconfigured-source refusal, existing Pumgye/Hopae menus,
+permission matrix, SSO and logout cleanup. Native mTLS HGD1 and API authentication/
+authorization pass. An initial browser assertion used eval prohibited by existing
+CSP; the verifier now supplies a function without weakening CSP. Production
+Kubernetes source remains unconfigured, and diagnostic results are not enforcement.
+Public release tags and GitHub Actions were not changed. These successful gates
+supersede the earlier unresolved rollout status, not its factual failure record.
