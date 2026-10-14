@@ -129,3 +129,13 @@ Namespace facts, with source cluster/UID/freshness fencing still owned by the
 adapter. API parsing, selector-to-address materialization and server enforcement
 remain open. Core tests cover combined versus separate selectors and empty/absent
 scope distinctions. Reference: [NetworkPolicy selectors](https://kubernetes.io/docs/concepts/services-networking/network-policies/#behavior-of-to-and-from-selectors).
+
+## Server selector source adapter
+
+The server now parses Kubernetes LabelSelector JSON with exact matchLabels and
+matchExpressions fields and compiles it into the core. Unknown fields/operators,
+null maps, invalid operator/value cardinality and oversized inputs are refused.
+`sumunjang --check-kubernetes-selector FILE` runs offline without DB/listeners.
+This validates shape and predicate bounds, not complete Kubernetes label syntax.
+API collection, NetworkPolicy parsing, UID/freshness fencing and request-context
+integration remain open; no production policy is activated by this command.

@@ -135,3 +135,12 @@ namespaceSelector가 없으면 podSelector는 정책의 Namespace 안에서만 �
 선택자에서 주소로의 구체화 및 서버 집행은 남아 있습니다. 코어 테스트는 결합
 선택자와 빈 값·없음의 범위 차이를 검증합니다.
 참조: [NetworkPolicy selectors](https://kubernetes.io/docs/concepts/services-networking/network-policies/#behavior-of-to-and-from-selectors).
+
+## 서버 선택자 원천 어댑터
+
+서버에 K8s LabelSelector JSON의 matchLabels·matchExpressions를 코어로 변환하는
+어댑터를 추가했습니다. 알 수 없는 필드·연산자, null map, 연산자별 잘못된 값
+개수와 과도한 입력을 거부합니다. `sumunjang --check-kubernetes-selector FILE`은
+DB·리스너 없이 실행됩니다. 검증 범위는 구조·조건 용량이며 K8s 라벨 문법 전체는
+아닙니다. API 수집·NetworkPolicy 파싱·UID/신선도 보호·요청 문맥 연결은 남았고
+이 명령이 운영 정책을 활성화하지는 않습니다.

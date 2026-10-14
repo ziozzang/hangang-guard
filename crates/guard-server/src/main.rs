@@ -1,4 +1,5 @@
 mod geoip;
+mod kubernetes;
 mod lua_rules;
 mod protocol;
 #[cfg(target_os = "linux")]
@@ -33,6 +34,9 @@ struct Args {
     /// Report version, identity, and capabilities without starting the service.
     #[arg(long)]
     about: bool,
+    /// Validate a Kubernetes LabelSelector JSON file without DB or listeners.
+    #[arg(long)]
+    check_kubernetes_selector: Option<PathBuf>,
     /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
     #[arg(long)]
     check: bool,
@@ -715,6 +719,13 @@ fn worker_arguments() -> Vec<std::ffi::OsString> {
 }
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(path) = &args.check_kubernetes_selector {
+        kubernetes::compile_selector(&read_bounded(path, 65536)?)?;
+        println!(
+            "Kubernetes selector shape and predicate bounds: valid (label syntax not qualified)"
+        );
+        return Ok(());
+    }
     if args.about {
         println!(
             "{}",
