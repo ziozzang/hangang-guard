@@ -20,6 +20,7 @@ from update_smoke import children, eventually, free_port, request
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', default='target/debug/sumunjang', type=Path)
+    parser.add_argument('--hangang-client', type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
     with tempfile.TemporaryDirectory(prefix='sumunjang-grpc-owned-') as temporary:
@@ -119,6 +120,8 @@ def main():
                         return False
                 eventually(replaced, 'gRPC listener handover and durable decision')
                 assert native_check('192.0.2.1')[1] == 1
+                if args.hangang_client:
+                    subprocess.run([str(args.hangang_client.resolve()), f'localhost:{transport}', api, str(root/'ca.pem'), str(root/'client.pem'), str(root/'client.key')], env=env, check=True, timeout=20)
                 assert request(api, '/v1/blocks', admin, {'network': '192.0.2.1/32'}, 'DELETE')[0] == 200
                 revoked = check()
                 assert revoked.verdict == 1 and revoked.revision > reply.revision
