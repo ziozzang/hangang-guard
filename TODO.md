@@ -479,3 +479,16 @@ mTLS HGD1, Pumgye/Hopae menus, matrix, SSO/logout and actual Hangang Kubernetes
 diagnostic proxy pass. The browser visibly shows disabled for unconfigured source,
 rather than stale normal status. Production source remains unconfigured; diagnostics
 are not gateway/CNI enforcement. Public release tags and Actions are unchanged.
+
+## Namespace-indexed compiled policy candidates
+
+CompiledPolicySet now owns policies grouped in a BTreeMap by namespace, with a
+separate total policy count. Decisions perform an allocation-free borrowed namespace
+lookup and evaluate only that namespace's candidates; unrelated namespace grants
+cannot contribute. Compilation and indexing remain off the request path. A 64-
+namespace fixture verifies alternating deny/port grants, opposite-direction
+non-isolation, port boundaries and absent namespace handling. All 33 server tests,
+strict clippy and actual 129-policy source/follower lifecycle qualification pass.
+This is structural lookup optimization, not a new measured throughput claim.
+Same-namespace selector/rule indexes and contextual enforcement remain open.
+Production retains the previously qualified backend.

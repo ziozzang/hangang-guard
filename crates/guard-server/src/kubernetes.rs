@@ -140,14 +140,27 @@ impl CompiledPolicy {
 }
 #[derive(Clone)]
 struct CompiledPolicySet {
-    policies: Vec<CompiledPolicy>,
+    by_namespace: BTreeMap<String, Vec<CompiledPolicy>>,
+    policy_count: usize,
 }
 impl CompiledPolicySet {
+    fn index(policies: Vec<CompiledPolicy>) -> Self {
+        let policy_count = policies.len();
+        let mut by_namespace: BTreeMap<String, Vec<CompiledPolicy>> = BTreeMap::new();
+        for policy in policies {
+            by_namespace
+                .entry(policy.namespace.clone())
+                .or_default()
+                .push(policy);
+        }
+        Self {
+            by_namespace,
+            policy_count,
+        }
+    }
     fn compile(source: &serde_json::Value) -> Result<Self> {
         if source["kind"] != "NetworkPolicyList" {
-            return Ok(Self {
-                policies: vec![compile_policy(source)?],
-            });
+            return Ok(Self::index(vec![compile_policy(source)?]));
         }
         ensure!(
             source["apiVersion"] == "networking.k8s.io/v1",
@@ -167,7 +180,7 @@ impl CompiledPolicySet {
         for item in items {
             policies.push(compile_policy(item)?);
         }
-        Ok(Self { policies })
+        Ok(Self::index(policies))
     }
     fn decide(
         &self,
@@ -180,7 +193,10 @@ impl CompiledPolicySet {
     ) -> &'static str {
         let mut selected = false;
         let mut isolated = false;
-        for policy in &self.policies {
+        let Some(policies) = self.by_namespace.get(namespace) else {
+            return "not_selected";
+        };
+        for policy in policies {
             match policy.decide(namespace, labels, direction, peer, protocol, port) {
                 "allowed" => return "allowed",
                 "denied" => {
@@ -402,6 +418,67 @@ mod tests {
     }
     fn evaluate(value: &serde_json::Value) -> Result<&'static str> {
         evaluate_policy(&serde_json::to_vec(value)?)
+    }
+    #[test]
+    fn namespace_index_never_combines_other_namespace_grants() {
+        let mut items = Vec::new();
+        for index in 0..64 {
+            let spec = if index % 2 == 0 {
+                serde_json::json!({"podSelector":{},"policyTypes":["Ingress"]})
+            } else {
+                serde_json::json!({"podSelector":{},"ingress":[{"ports":[{"port":443}]}]})
+            };
+            let mut policy = query(spec)["policy"].clone();
+            policy["metadata"]["namespace"] = format!("ns-{index}").into();
+            items.push(policy);
+        }
+        let set=CompiledPolicySet::compile(&serde_json::json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicyList","items":items})).unwrap();
+        assert_eq!(set.policy_count, 64);
+        let labels = BTreeMap::new();
+        let peer = "192.0.2.1".parse().unwrap();
+        for index in 0..64 {
+            let namespace = format!("ns-{index}");
+            for port in [80, 443, 444] {
+                let expected = if index % 2 == 1 && port == 443 {
+                    "allowed"
+                } else {
+                    "denied"
+                };
+                assert_eq!(
+                    set.decide(
+                        &namespace,
+                        &labels,
+                        Direction::Ingress,
+                        peer,
+                        Transport::Tcp,
+                        port
+                    ),
+                    expected
+                );
+            }
+            assert_eq!(
+                set.decide(
+                    &namespace,
+                    &labels,
+                    Direction::Egress,
+                    peer,
+                    Transport::Tcp,
+                    443
+                ),
+                "not_isolated"
+            );
+        }
+        assert_eq!(
+            set.decide(
+                "outside",
+                &labels,
+                Direction::Ingress,
+                peer,
+                Transport::Tcp,
+                443
+            ),
+            "not_selected"
+        );
     }
     #[test]
     fn late_synchronous_compilation_cannot_create_source_snapshot() {
@@ -897,7 +974,7 @@ impl SourceSnapshot {
         })
     }
     pub(crate) fn report(&self) -> serde_json::Value {
-        serde_json::json!({"mode":"observe","policies":self.compiled.policies.len(),"resource_version":self.revision,"activated":false,"fresh":std::time::Instant::now()<self.expires})
+        serde_json::json!({"mode":"observe","policies":self.compiled.policy_count,"resource_version":self.revision,"activated":false,"fresh":std::time::Instant::now()<self.expires})
     }
     pub(crate) fn evaluate(&self, query: SourceQuery) -> Result<serde_json::Value> {
         ensure!(
