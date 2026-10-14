@@ -137,3 +137,12 @@ by management HTTPS. The 256-connection quota, zero shutdown drain, loopback
 restriction without TLS, mTLS/ALPN checks and native decision semantics remain
 unchanged. Connection tasks are owned and cancelled with the listener; supervised
 listener inheritance remains Sumunjang owned and requires its actual HUP gate.
+
+## v0.3.5 release preparation
+
+Network gRPC replies recheck captured policy and required GeoIP owners before
+returning. Owner replacement yields unavailable with zero TTL, including same
+numeric policy revisions. Debug/static transport and actual Pumgye observation
+fixtures passed. Newly versioned static assets require qualification before
+signed publication. These replies remain observations, not distributed leases.
+GitHub Actions remains disabled.
