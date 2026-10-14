@@ -44,6 +44,7 @@ def main():
                     body['metadata']['continue']='next' if not page else ''
                     if page:body['metadata']['resourceVersion']='changed'
                 if mode=='cycle':body['metadata']['continue']='repeat'
+                if mode=='deleting-policy':policy['metadata']['deletionTimestamp']='2026-01-01T00:00:00Z';body['items']=[policy]
                 if mode=='missing-name':del policy['metadata']['name'];body['items']=[policy]
                 if mode=='missing-item-revision':del policy['metadata']['resourceVersion'];body['items']=[policy]
                 if mode=='duplicate-name':
@@ -70,7 +71,7 @@ def main():
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             config=root/'source.json';config.write_text(json.dumps({'api':'https://127.0.0.1:'+str(server.server_port),'namespace':'owned','ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}))
-            cases=['valid','wrong-ca','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','missing-name','missing-item-revision','duplicate-name','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
+            cases=['valid','wrong-ca','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','deleting-policy','missing-name','missing-item-revision','duplicate-name','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
             for case in cases:
                 mode=case;requests.clear();started=time.monotonic()
                 source=json.loads(config.read_text())
@@ -152,6 +153,6 @@ def main():
                 output=(root/'follower.log').read_text()
                 if any(secret in output for secret in [token,rotated_token,admin]):
                     raise RuntimeError('persistent follower exposed credentials')
-            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; persistent TLS pool reuse/CA replacement/credential rotation and recovery; no activation')
+            print('PASS: 19 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; persistent TLS pool reuse/CA replacement/credential rotation and recovery; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()

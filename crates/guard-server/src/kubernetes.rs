@@ -804,6 +804,12 @@ async fn collect_source(bytes: &[u8], transport: &mut SourceTransport) -> Result
                     item["metadata"]["namespace"] == source.namespace,
                     "source namespace mismatch"
                 );
+                ensure!(
+                    item["metadata"]
+                        .get("deletionTimestamp")
+                        .is_none_or(serde_json::Value::is_null),
+                    "deleting policy cannot become a source candidate"
+                );
                 let uid = item["metadata"]["uid"]
                     .as_str()
                     .filter(|v| !v.is_empty() && v.len() <= 128)

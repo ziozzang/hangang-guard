@@ -61,6 +61,18 @@ def main():
             config['namespace']='default';path.write_text(json.dumps(config))
             if observe(token).returncode==0:raise RuntimeError('namespace RBAC boundary bypass')
             config['namespace']=namespace;path.write_text(json.dumps(config))
+            deleting={'apiVersion':'networking.k8s.io/v1','kind':'NetworkPolicy',
+                'metadata':{'name':'deleting-policy','namespace':namespace,'finalizers':['example.test/owned-qualification']},
+                'spec':{'podSelector':{},'ingress':[{}]}}
+            kubectl('create','-f','-',document=deleting)
+            try:
+                kubectl('delete','networkpolicy','deleting-policy','-n',namespace,'--wait=false')
+                item=json.loads(kubectl('get','networkpolicy','deleting-policy','-n',namespace,'-o','json'))
+                if not item['metadata'].get('deletionTimestamp'):raise RuntimeError('owned deletion boundary not exercised')
+                if observe(token).returncode==0:raise RuntimeError('deleting source policy accepted')
+            finally:
+                kubectl('patch','networkpolicy','deleting-policy','-n',namespace,'--type=merge','-p','{"metadata":{"finalizers":[]}}')
+
             admin=secrets.token_hex(32);collector=secrets.token_hex(32)
             with socket.socket() as listener:
                 listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
@@ -103,7 +115,7 @@ def main():
                     process.terminate()
                     try:process.wait(timeout=5)
                     except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)
-        print('PASS: actual namespaced CA-pinned 129-policy pagination, deletion/UID recreation, invalid-token/RBAC refusal and live follower withdrawal/recovery/admin boundary; no activation')
+        print('PASS: actual namespaced CA-pinned 129-policy pagination, deletion/UID recreation/deletion-in-progress refusal, invalid-token/RBAC refusal and live follower withdrawal/recovery/admin boundary; no activation')
     finally:
         kubectl('delete','namespace',namespace,'--wait=false')
 if __name__=='__main__':main()

@@ -454,3 +454,15 @@ original/rotated bearer and administrator secrets. These gates and all 18 earlie
 TLS boundary cases pass. This is reference/material switching within one process,
 not Kubernetes Secret watch delivery or mutation of process environment values.
 Production deployment remains unchanged.
+
+## Deletion-in-progress source fencing
+
+Collection refuses a policy with non-null deletionTimestamp instead of compiling
+it or silently omitting it from an authoritative set. This conservatively makes
+the candidate unavailable until complete reconciliation; it is not a claim that
+Kubernetes/CNI policy deletion is instantaneous. The owned real API fixture holds
+one policy using its own finalizer, requests deletion, verifies deletionTimestamp
+and proves the actual observer refuses collection. It removes the finalizer and
+cleans its namespace. Nineteen TLS cases (including deleting policy), persistent
+pool/credential recovery, actual pagination/lifecycle/follower smoke and strict
+clippy pass. Production remains at its previously qualified deployment.
