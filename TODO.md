@@ -267,3 +267,13 @@ receives zero HTTP requests, so its bearer does not cross an untrusted TLS chann
 Restoring the intended CA permits the subsequent valid pagination case. All 15
 source cases pass. This checks fresh-process CA configuration; live key/CA rotation
 and persistent transport pool replacement remain unqualified.
+
+## Source object identity completeness
+
+Namespaced source collection now requires bounded nonempty object name, UID and
+individual resourceVersion. It rejects repeated names even when UIDs differ,
+preventing same-name replacement facts from being combined in one candidate.
+Individual object revisions need not equal the collection revision. The owned TLS
+fixture covers missing names/revisions and duplicate names; all 18 cases pass.
+Actual Kubernetes source/authentication/RBAC smoke and strict clippy also pass.
+This does not establish cross-resource atomicity or persistent source ownership.

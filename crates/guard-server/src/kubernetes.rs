@@ -714,9 +714,23 @@ pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
                 );
                 let uid = item["metadata"]["uid"]
                     .as_str()
-                    .filter(|v| !v.is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("source UID missing"))?;
+                    .filter(|v| !v.is_empty() && v.len() <= 128)
+                    .ok_or_else(|| anyhow::anyhow!("source UID missing or oversized"))?;
                 ensure!(seen.insert(format!("uid:{uid}")), "duplicate source UID");
+                let name = item["metadata"]["name"]
+                    .as_str()
+                    .filter(|v| !v.is_empty() && v.len() <= 253)
+                    .ok_or_else(|| anyhow::anyhow!("source object name missing or oversized"))?;
+                ensure!(
+                    seen.insert(format!("name:{name}")),
+                    "duplicate source object name"
+                );
+                ensure!(
+                    item["metadata"]["resourceVersion"]
+                        .as_str()
+                        .is_some_and(|v| !v.is_empty() && v.len() <= 1024),
+                    "source object revision missing or oversized"
+                );
                 if item.get("kind").is_none() {
                     item["kind"] = "NetworkPolicy".into();
                 }

@@ -25,13 +25,14 @@ def main():
                 if self.headers.get('Authorization')!='Bearer '+token:
                     self.send_response(401);self.end_headers();return
                 page=parse_qs(urlsplit(self.path).query).get('continue',[''])[0]
-                policy={'metadata':{'namespace':'owned','uid':'uid-one'},'spec':{'podSelector':{},'policyTypes':['Ingress']}}
+                policy={'metadata':{'namespace':'owned','uid':'uid-one','name':'policy-one','resourceVersion':'item-rv'},'spec':{'podSelector':{},'policyTypes':['Ingress']}}
                 body={'kind':'NetworkPolicyList','apiVersion':'networking.k8s.io/v1','metadata':{'resourceVersion':'opaque-rv','continue':''},'items':[]}
                 status=200
                 if mode=='valid-paginated':
                     if page and page!='opaque+/%=token':
                         self.send_response(400);self.end_headers();return
                     policy['metadata']['uid']='uid-two' if page else 'uid-one'
+                    policy['metadata']['name']='policy-two' if page else 'policy-one'
                     body['items']=[policy]
                     body['metadata']['continue']='' if page else 'opaque+/%=token'
                 if mode=='wrong-kind':body['kind']='List'
@@ -40,6 +41,10 @@ def main():
                     body['metadata']['continue']='next' if not page else ''
                     if page:body['metadata']['resourceVersion']='changed'
                 if mode=='cycle':body['metadata']['continue']='repeat'
+                if mode=='missing-name':del policy['metadata']['name'];body['items']=[policy]
+                if mode=='missing-item-revision':del policy['metadata']['resourceVersion'];body['items']=[policy]
+                if mode=='duplicate-name':
+                    other=json.loads(json.dumps(policy));other['metadata']['uid']='uid-two';body['items']=[policy,other]
                 if mode=='duplicate-uid':body['items']=[policy,policy]
                 if mode=='wrong-namespace':policy['metadata']['namespace']='other';body['items']=[policy]
                 if mode=='missing-uid':del policy['metadata']['uid'];body['items']=[policy]
@@ -58,7 +63,7 @@ def main():
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             config=root/'source.json';config.write_text(json.dumps({'api':'https://127.0.0.1:'+str(server.server_port),'namespace':'owned','ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}))
-            cases=['valid','wrong-ca','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
+            cases=['valid','wrong-ca','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','missing-name','missing-item-revision','duplicate-name','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
             for case in cases:
                 mode=case;requests.clear();started=time.monotonic()
                 source=json.loads(config.read_text())
@@ -78,6 +83,6 @@ def main():
                 if case=='wrong-ca' and requests:raise RuntimeError('credential reached untrusted TLS source')
                 if case=='slow' and elapsed>1.2:raise RuntimeError('source deadline exceeded')
                 if case=='redirect' and len(requests)!=1:raise RuntimeError('source redirect followed')
-            print('PASS: 15 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
+            print('PASS: 18 owned TLS source cases including wrong-CA rejection and complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()
