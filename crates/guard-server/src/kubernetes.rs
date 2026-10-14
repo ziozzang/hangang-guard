@@ -590,3 +590,164 @@ mod tests {
         assert!(compile_selector(&vec![b' '; 65537]).is_err());
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceConfig {
+    api: String,
+    namespace: String,
+    ca: std::path::PathBuf,
+    token_env: String,
+}
+/// Read-only collection. Publication and request-time authority are separate gates.
+pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
+    use std::time::Duration;
+    let source: SourceConfig = serde_json::from_slice(bytes)?;
+    let mut url = reqwest::Url::parse(&source.api)?;
+    ensure!(
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.path() == "/",
+        "API must be an HTTPS origin"
+    );
+    ensure!(
+        !source.namespace.is_empty()
+            && source.namespace.len() <= 63
+            && source
+                .namespace
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !source.namespace.starts_with('-')
+            && !source.namespace.ends_with('-'),
+        "invalid source namespace"
+    );
+    ensure!(
+        !source.token_env.is_empty()
+            && source.token_env.len() <= 128
+            && source
+                .token_env
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
+        "invalid token environment reference"
+    );
+    let secret = std::env::var(&source.token_env)
+        .map_err(|_| anyhow::anyhow!("source token unavailable"))?;
+    ensure!(
+        !secret.is_empty() && secret.len() <= 16384 && !secret.chars().any(char::is_whitespace),
+        "invalid source token"
+    );
+    let mut authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {secret}"))?;
+    authorization.set_sensitive(true);
+    let ca = crate::read_bounded(&source.ca, 128 * 1024)?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(reqwest::Certificate::from_pem(&ca)?)
+        .timeout(Duration::from_millis(1000))
+        .build()?;
+    url.set_path(&format!(
+        "/apis/networking.k8s.io/v1/namespaces/{}/networkpolicies",
+        source.namespace
+    ));
+    let collection = async {
+        let mut items = Vec::new();
+        let mut continuation = String::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut revision = None;
+        let mut total = 0usize;
+        for _ in 0..32 {
+            url.set_query(None);
+            url.query_pairs_mut().append_pair("limit", "128");
+            if !continuation.is_empty() {
+                url.query_pairs_mut().append_pair("continue", &continuation);
+            }
+            let mut response = client
+                .get(url.clone())
+                .header(reqwest::header::AUTHORIZATION, authorization.clone())
+                .send()
+                .await
+                .map_err(|_| anyhow::anyhow!("source request unavailable"))?;
+            ensure!(response.status().is_success(), "source refused collection");
+            let mut body = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|_| anyhow::anyhow!("source body unavailable"))?
+            {
+                total = total
+                    .checked_add(chunk.len())
+                    .ok_or_else(|| anyhow::anyhow!("source size overflow"))?;
+                ensure!(total <= 1024 * 1024, "source collection too large");
+                body.extend_from_slice(&chunk);
+            }
+            let page: serde_json::Value = serde_json::from_slice(&body)?;
+            ensure!(
+                page["kind"] == "NetworkPolicyList" && page["apiVersion"] == "networking.k8s.io/v1",
+                "wrong source collection kind"
+            );
+            let rv = page["metadata"]["resourceVersion"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 1024)
+                .ok_or_else(|| anyhow::anyhow!("source revision missing"))?;
+            if let Some(previous) = &revision {
+                ensure!(previous == rv, "source revision changed between pages");
+            } else {
+                revision = Some(rv.to_owned());
+            }
+            let entries = page["items"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("source items missing"))?;
+            ensure!(
+                items.len() + entries.len() <= 4096,
+                "too many source policies"
+            );
+            for entry in entries {
+                let mut item = entry.clone();
+                ensure!(
+                    item["metadata"]["namespace"] == source.namespace,
+                    "source namespace mismatch"
+                );
+                let uid = item["metadata"]["uid"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("source UID missing"))?;
+                ensure!(seen.insert(format!("uid:{uid}")), "duplicate source UID");
+                if item.get("kind").is_none() {
+                    item["kind"] = "NetworkPolicy".into();
+                }
+                if item.get("apiVersion").is_none() {
+                    item["apiVersion"] = "networking.k8s.io/v1".into();
+                }
+                items.push(item);
+            }
+            continuation = match page["metadata"].get("continue") {
+                None => String::new(),
+                Some(v) => v
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("invalid source continuation"))?
+                    .to_owned(),
+            };
+            ensure!(continuation.len() <= 8192, "source continuation too long");
+            if continuation.is_empty() {
+                let list = serde_json::json!({"kind":"NetworkPolicyList","apiVersion":"networking.k8s.io/v1","metadata":{"resourceVersion":revision,"continue":""},"items":items});
+                let compiled = CompiledPolicySet::compile(&list)?;
+                return Ok(
+                    serde_json::json!({"mode":"observe","policies":compiled.policies.len(),"resource_version":revision,"activated":false}),
+                );
+            }
+            ensure!(
+                seen.insert(format!("page:{continuation}")),
+                "source continuation cycle"
+            );
+        }
+        anyhow::bail!("source page bound exceeded")
+    };
+    tokio::time::timeout(Duration::from_millis(1000), collection)
+        .await
+        .map_err(|_| anyhow::anyhow!("source collection deadline"))?
+}

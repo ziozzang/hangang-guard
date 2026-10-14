@@ -214,3 +214,18 @@ Clippy와 실제 API 비교 22개가 통과했습니다. 실행 중 게시·신�
 7개·Clippy·실제 API 회귀 22개가 통과했습니다. 정책 후보는 제한된 순차 조회이며
 대규모 인덱스·실제 페이지 수집·실행 중 신선도는 남아 있습니다. 운영 권위는
 활성화하지 않았습니다.
+
+## 인증된 K8s 원천 관찰 경로
+
+`--observe-kubernetes-policy FILE`은 비공개 원천 설정 api·namespace·ca·token_env를
+읽습니다. HTTPS Origin과 지정 CA를 사용하며 프록시·리다이렉트를 끄고 Bearer
+헤더를 민감값으로 표시합니다. 전체 수집/컴파일을 32페이지·4096항목·1MiB·1초로
+제한합니다. 페이지의 resourceVersion 일치, Namespace·UID 사실과 continuation
+순환을 검사하고 검증된 collection에서 누락된 항목 TypeMeta만 채웁니다. 전체
+컴파일 성공 후 개수/revision만 보고하며 리스너·DB·정책 권위는 변경하지 않습니다.
+
+`tools/kubernetes_source_smoke.py`가 임시 Namespace와 list 전용 ServiceAccount로
+실제 실행 파일을 검증합니다. 수집/컴파일·잘못된 토큰 거부·다른 Namespace RBAC
+거부가 통과했고 자체 fixture Namespace만 삭제했습니다. 서버 Clippy도 통과했습니다.
+악성 페이지/TLS/timeout·원천 게시·watch 복구·회전/풀링·요청 집행은 남아 있습니다.
+운영 활성화가 아닌 관찰 경로입니다.

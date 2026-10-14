@@ -218,3 +218,21 @@ that as a zero-trust authorization grant. Seven adapter tests, strict clippy and
 22 owned API regression cases pass. Lists currently scan bounded policy candidates;
 large-policy indexing, actual pagination collection and runtime freshness remain
 open. No production authority is activated.
+
+## Authenticated Kubernetes source observer
+
+`--observe-kubernetes-policy FILE` reads private source config fields api,
+namespace, ca and token_env. It requires an HTTPS origin, pins the configured CA,
+disables proxies/redirects and marks bearer headers sensitive. Namespaced list
+collection is bounded to 32 pages, 4096 items, 1 MiB and one second across the full
+collection/compilation. It validates opaque resourceVersion equality between pages,
+namespace/UID facts and continuation cycles; fills only omitted item TypeMeta from
+the validated collection. All policies must compile before a count/revision report.
+It starts no listeners and changes no DB or policy authority.
+
+`tools/kubernetes_source_smoke.py` qualifies the actual executable against an owned
+Kubernetes API using a temporary namespace and list-only ServiceAccount. Successful
+collection/compilation, invalid-token refusal and cross-namespace RBAC refusal pass;
+cleanup deletes only its fixture namespace. Strict server clippy passes. Malicious
+pagination/TLS/timeouts, source publication, watch recovery, rotation/pooling and
+contextual enforcement remain open. This observer is not production activation.

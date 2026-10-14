@@ -40,6 +40,9 @@ struct Args {
     /// Evaluate an owned offline NetworkPolicy/query fixture without activating it.
     #[arg(long)]
     evaluate_kubernetes_policy: Option<PathBuf>,
+    /// Read and compile a namespaced Kubernetes policy source without activation.
+    #[arg(long)]
+    observe_kubernetes_policy: Option<PathBuf>,
     /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
     #[arg(long)]
     check: bool,
@@ -748,6 +751,13 @@ fn main() -> anyhow::Result<()> {
         .block_on(run(args))
 }
 async fn run(args: Args) -> anyhow::Result<()> {
+    if let Some(path) = &args.observe_kubernetes_policy {
+        println!(
+            "{}",
+            kubernetes::observe_source(&read_bounded(path, 16384)?).await?
+        );
+        return Ok(());
+    }
     if args.check_update {
         let release = guard_update::github_release::latest().await?;
         println!(
