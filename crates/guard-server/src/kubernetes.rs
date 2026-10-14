@@ -1,4 +1,6 @@
-//! Source adapter predicates. No API collection or enforcement activation yet.
+#[path = "kubernetes_pod_facts.rs"]
+mod pod_facts;
+// Source adapters; diagnostic collection is not request enforcement.
 use anyhow::{Result, ensure};
 use guard_core::selector::{LabelSelector, Operator, Requirement};
 use serde::Deserialize;
@@ -1049,4 +1051,11 @@ pub(crate) async fn follow_source(
     }
     snapshots.store(None);
     phase.store(4, std::sync::atomic::Ordering::Release);
+}
+
+pub(crate) fn check_pod_facts(bytes: &[u8]) -> Result<serde_json::Value> {
+    let (namespaces, pods) = pod_facts::parse(bytes)?;
+    Ok(
+        serde_json::json!({"namespaces":namespaces.len(),"pods":pods.len(),"coherence_qualified":false,"activated":false}),
+    )
 }

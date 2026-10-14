@@ -37,6 +37,9 @@ struct Args {
     /// Validate a Kubernetes LabelSelector JSON file without DB or listeners.
     #[arg(long)]
     check_kubernetes_selector: Option<PathBuf>,
+    /// Parse an offline NamespaceList/PodList fixture without activation.
+    #[arg(long)]
+    check_kubernetes_pod_facts: Option<PathBuf>,
     /// Evaluate an owned offline NetworkPolicy/query fixture without activating it.
     #[arg(long)]
     evaluate_kubernetes_policy: Option<PathBuf>,
@@ -780,6 +783,13 @@ fn main() -> anyhow::Result<()> {
         println!(
             "{}",
             kubernetes::evaluate_policy(&read_bounded(path, 1024 * 1024)?)?
+        );
+        return Ok(());
+    }
+    if let Some(path) = &args.check_kubernetes_pod_facts {
+        println!(
+            "{}",
+            kubernetes::check_pod_facts(&read_bounded(path, 1024 * 1024)?)?
         );
         return Ok(());
     }

@@ -562,3 +562,22 @@ functional/integration qualification first. Prioritize actual resource ingestion
 identity/permission boundaries, withdrawal, lifecycle recovery and console flows.
 Do not expand the current remote test work into load benchmarks or require extra
 physical servers/load generators. Long-term throughput requirements remain separate.
+
+## Namespace/Pod API fact parser
+
+Server `--check-kubernetes-pod-facts FILE` parses bounded original v1 NamespaceList
+and PodList responses, requiring complete lists and bounded name/UID/revision facts.
+It validates labels, deletion state, hostNetwork type and primary/podIPs consistency.
+Pod namespace UID is associated with the supplied Namespace collection, not read
+from a nonexistent Pod field. Reports explicitly mark cross-resource coherence
+unqualified and enforcement inactive. Twelve adapter tests and strict clippy pass.
+Read-only qualification against the user-designated remote k3s passes using actual
+API envelopes. kubectl's reconstructed generic List output was replaced with raw
+API reads, not accepted as an authoritative collection. Coherent collection/barriers,
+selector rule compilation and actual enforcement remain open.
+
+The user requires all four components as one Hangang-integrated native Kubernetes
+package, with Hangang World zero-trust authority as the original domain source.
+Individual adapters are intermediate gates, not final success. Before subsequent
+cluster-changing tests, create/verify node backups and record recovery paths;
+prioritize functional tests in the supplied environment.
