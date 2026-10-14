@@ -480,3 +480,14 @@ NetworkPeers::hosts가 최대 4096개 원천 주소를 /32 또는 /128 radix 인
 의미하지 않습니다. 코어 30개 테스트와 Clippy가 통과했습니다. Pod/Namespace
 원천 파싱·UID/수명주기 조정·named port·집행 연결은 남아 있습니다. 정리한 캐시가
 다시 커지지 않도록 이번 검사에서는 incremental 컴파일을 비활성화했습니다.
+
+## 순수 Pod peer 주소 구체화
+
+pod_peers::resolve가 제한된 전체 Namespace/Pod 사실을 결합 선택자로 평가해
+정확한 host peer로 변환합니다. 이름/UID 중복·Namespace UID 연계·정규화된 실제
+주소 충돌을 검사합니다. 삭제 중 Pod는 주소를 제공하지 않고 선택된 hostNetwork는
+집행 의미가 검증되지 않아 거부합니다. 빈 결과는 허용하지 않습니다. Namespace UID는
+조립자의 연계 정보이지 K8s Pod 필드가 아닙니다. 호출자가 클러스터·완결성·신선도·
+일관된 수명주기를 확보해야 하며 IP 소속이 인증은 아닙니다. 코어 32개와 Clippy가
+통과했습니다. 실제 API 사실 수집·리소스 간 조정·named port·집행은 남았고 운영은
+변경하지 않았습니다.

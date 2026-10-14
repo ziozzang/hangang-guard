@@ -2,6 +2,7 @@ pub mod rules;
 use rules::CompiledRules;
 pub use rules::{GeoContext, Rule, RuleAction, RuleSet, Suspicion};
 pub mod network_policy;
+pub mod pod_peers;
 pub mod prefix;
 pub mod selector;
 use anyhow::{Result, ensure};

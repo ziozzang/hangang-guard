@@ -535,3 +535,16 @@ materialization output, not authentication by IP. Thirty core tests and strict
 clippy pass. Pod/Namespace source parsing, UID/lifecycle reconciliation, named
 ports and enforcement integration remain required. Incremental compilation was
 disabled for these checks to avoid rebuilding the recently cleared disk cache.
+
+## Pure Pod peer materialization
+
+Core pod_peers::resolve now maps bounded complete Namespace/Pod facts through the
+combined selector into exact host peers. It validates unique names/UIDs, namespace
+UID associations and nonambiguous canonical live addresses. Deleting Pods contribute
+no addresses; selected hostNetwork Pods refuse materialization because their network
+semantics are not qualified. Empty results remain deny-only. Namespace UID is an
+assembler association, not a Kubernetes Pod field; callers must establish cluster,
+completeness, freshness and coherent lifecycle before supplying these facts. IP
+membership is not authentication. All 32 core tests and strict clippy pass. Actual
+API fact collection, cross-resource reconcile fences, named ports and enforcement
+remain required. Production remains unchanged.
