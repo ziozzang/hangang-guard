@@ -36,3 +36,13 @@ The owned fixture proves mTLS refusal, role isolation, malformed/oversized input
 native parity, revision fencing, immediate policy changes, and HUP listener handover.
 Actual Kubernetes gRPC deployment, Hangang gRPC clients and public release artifacts
 are separate unfinished gates.
+
+## Final snapshot fence (unreleased)
+
+Check captures the exact immutable policy view and, when required, GeoIP catalog
+before evaluating. Before replying it rechecks their Arc identities. Policy
+replacement at the same numeric revision and GeoIP replacement discard the
+candidate and return unavailable/unspecified mode/zero TTL. TTL is capped at
+five seconds. Tests exercise both owner replacements and existing caller/quota/
+revision-floor gates. This is a local response fence, not a signed network receipt
+or distributed owner lease. Pumgye receipt/permit integration remains separate.

@@ -21,3 +21,11 @@ Linux 감독 실행에서 HUP 시 리스너를 인계한다. 클라이언트 재
 `python tools/grpc_smoke.py --binary target/debug/sumunjang`으로 실제 전송을 검증한다.
 인증서·자격 거부, 입력 제한, 네이티브 일치, 정책 변경 및 HUP 인계를 확인했다.
 실제 K8s gRPC 배포·한강 gRPC 클라이언트·릴리즈는 미완료다.
+
+## 최종 스냅샷 검사 (미릴리스)
+
+Check는 판정 전에 정확한 불변 정책 view와 필요한 경우 GeoIP 카탈로그를 캡처합니다.
+응답 직전에 Arc 동일성을 재확인하며 같은 숫자 리비전의 정책 교체·GeoIP 교체도
+후보를 버리고 unavailable/미지정 모드/TTL 0을 반환합니다. TTL은 최대 5초입니다.
+두 소유자 교체와 기존 호출자/수용량/리비전 하한 검사를 수행합니다. 로컬 응답 경계이며
+서명 네트워크 receipt나 분산 소유권 lease가 아닙니다. 품계 receipt/permit 연결은 별도입니다.

@@ -50,11 +50,35 @@ impl Network for Service {
             }
             _ => return Err(Status::invalid_argument("invalid address size")),
         };
-        let view = self.app.view.load();
-        let decision = self.app.query(&view, ip, crate::now());
-        let available = decision.revision >= input.minimum_revision;
-        Ok(Response::new(NetworkReply {
-            request_id: input.request_id,
+        let view = self.app.view.load_full();
+        let geo = view.requires_geo().then(|| self.app.geo.load_full());
+        let decision = match &geo {
+            Some(geo) => view.query_ip_context(ip, crate::now(), geo.context(ip)),
+            None => view.query_ip(ip, crate::now()),
+        };
+        Ok(Response::new(self.reply(
+            input.request_id,
+            input.minimum_revision,
+            &view,
+            geo.as_ref(),
+            decision,
+        )))
+    }
+}
+impl Service {
+    fn reply(
+        &self,
+        request_id: u64,
+        minimum_revision: u64,
+        view: &Arc<guard_core::DecisionView>,
+        geo: Option<&Arc<crate::geoip::GeoCatalog>>,
+        decision: guard_core::DecisionRef<'_>,
+    ) -> NetworkReply {
+        let available = decision.revision >= minimum_revision
+            && Arc::ptr_eq(view, &self.app.view.load_full())
+            && geo.is_none_or(|captured| Arc::ptr_eq(captured, &self.app.geo.load_full()));
+        NetworkReply {
+            request_id,
             revision: decision.revision,
             verdict: if !available {
                 3
@@ -70,8 +94,12 @@ impl Network for Service {
             } else {
                 1
             },
-            ttl_ms: if available { decision.ttl_ms as u32 } else { 0 },
-        }))
+            ttl_ms: if available {
+                decision.ttl_ms.min(5000) as u32
+            } else {
+                0
+            },
+        }
     }
 }
 pub async fn serve(
@@ -112,6 +140,47 @@ mod tests {
             .metadata_mut()
             .insert("authorization", format!("Bearer {token}").parse().unwrap());
         request
+    }
+    #[test]
+    fn changed_owner_with_same_revision_discards_captured_network_reply() {
+        let service = Service {
+            app: crate::tests::app(),
+            requests: Arc::new(Semaphore::new(1)),
+        };
+        let view = service.app.view.load_full();
+        let decision = view.query_ip("192.0.2.1".parse().unwrap(), crate::now());
+        assert_ne!(service.reply(7, 0, &view, None, decision).verdict, 3);
+        service.app.view.store(Arc::new((*view).clone()));
+        let decision = view.query_ip("192.0.2.1".parse().unwrap(), crate::now());
+        let reply = service.reply(7, 0, &view, None, decision);
+        assert_eq!((reply.request_id, reply.revision), (7, view.revision));
+        assert_eq!((reply.verdict, reply.mode, reply.ttl_ms), (3, 0, 0));
+    }
+    #[test]
+    fn changed_geo_owner_discards_reply_that_used_captured_geo() {
+        let service = Service {
+            app: crate::tests::app(),
+            requests: Arc::new(Semaphore::new(1)),
+        };
+        let view = service.app.view.load_full();
+        let geo = service.app.geo.load_full();
+        let decision = view.query_ip_context(
+            "192.0.2.1".parse().unwrap(),
+            crate::now(),
+            geo.context("192.0.2.1".parse().unwrap()),
+        );
+        assert_ne!(service.reply(8, 0, &view, Some(&geo), decision).verdict, 3);
+        service
+            .app
+            .geo
+            .store(Arc::new(crate::geoip::GeoCatalog::default()));
+        let decision = view.query_ip_context(
+            "192.0.2.1".parse().unwrap(),
+            crate::now(),
+            geo.context("192.0.2.1".parse().unwrap()),
+        );
+        let reply = service.reply(8, 0, &view, Some(&geo), decision);
+        assert_eq!((reply.verdict, reply.mode, reply.ttl_ms), (3, 0, 0));
     }
     #[tokio::test]
     async fn admission_is_bounded_and_revision_fence_is_unavailable() {
