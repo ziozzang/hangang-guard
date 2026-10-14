@@ -192,3 +192,15 @@ and a peer combining ipBlock with podSelector. The local evaluator's existing
 rejections agree; the maintained tool now checks both alongside the 20 positive/
 syntax cases. An empty ingress rule `{}` permits all peers, while an empty peer
 object is invalid. No empty-peer wildcard support was committed or deployed.
+
+## Compiled NetworkPolicy candidate separation
+
+Server policy compilation now owns an immutable target selector and independently
+compiled ingress/egress views. Typed decisions reuse that candidate without JSON
+parsing, filesystem, database or API access. Offline evaluation compiles once then
+calls the same decision method. Regression mutates the original source, compiles a
+new deny candidate and proves repeated old/new decisions remain independent; an
+invalid replacement cannot alter the old view. Six adapter tests, strict clippy
+and the 22 actual owned-API qualification cases pass. No live publication/freshness
+state machine is implemented yet; preserving an old candidate in this unit test is
+not permission to serve stale authoritative policy. Production remains unchanged.

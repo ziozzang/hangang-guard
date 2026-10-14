@@ -99,19 +99,57 @@ struct OfflineEvaluation {
     protocol: String,
     port: u16,
 }
-/// Offline fixture evaluation only. Selector peers and named ports are refused
-/// until their authoritative object resolution is implemented.
-pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
-    use guard_core::network_policy::{
-        IpBlock, NetworkDecision, NetworkRule, PortRange, SelectedDirection, Transport,
-    };
+use guard_core::network_policy::{NetworkDecision, SelectedDirection, Transport};
+
+#[derive(Clone)]
+struct CompiledPolicy {
+    namespace: String,
+    target: LabelSelector,
+    incoming: SelectedDirection,
+    outgoing: SelectedDirection,
+}
+#[derive(Clone, Copy)]
+enum Direction {
+    Ingress,
+    Egress,
+}
+impl CompiledPolicy {
+    /// Caller supplies authoritative target labels; no parsing or I/O occurs here.
+    fn decide(
+        &self,
+        namespace: &str,
+        labels: &BTreeMap<String, String>,
+        direction: Direction,
+        peer: std::net::IpAddr,
+        protocol: Transport,
+        port: u16,
+    ) -> &'static str {
+        if self.namespace != namespace || !self.target.matches(labels) {
+            return "not_selected";
+        }
+        let view = match direction {
+            Direction::Ingress => &self.incoming,
+            Direction::Egress => &self.outgoing,
+        };
+        match view.decide(peer, protocol, port) {
+            NetworkDecision::NotIsolated => "not_isolated",
+            NetworkDecision::Allowed => "allowed",
+            NetworkDecision::Denied => "denied",
+        }
+    }
+}
+fn transport(value: &str) -> Result<Transport> {
+    match value {
+        "TCP" => Ok(Transport::Tcp),
+        "UDP" => Ok(Transport::Udp),
+        "SCTP" => Ok(Transport::Sctp),
+        _ => anyhow::bail!("unsupported transport"),
+    }
+}
+/// Compile off the request path. Selector peers and named ports remain refused.
+fn compile_policy(policy: &serde_json::Value) -> Result<CompiledPolicy> {
+    use guard_core::network_policy::{IpBlock, NetworkRule, PortRange};
     use serde_json::Value;
-    ensure!(
-        bytes.len() <= 1024 * 1024,
-        "policy evaluation document too large"
-    );
-    let query: OfflineEvaluation = serde_json::from_slice(bytes)?;
-    let policy = &query.policy;
     ensure!(
         policy["apiVersion"] == "networking.k8s.io/v1" && policy["kind"] == "NetworkPolicy",
         "wrong policy kind/version"
@@ -161,14 +199,6 @@ pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
             )
         }
         _ => anyhow::bail!("invalid policyTypes"),
-    };
-    let transport = |value: &str| -> Result<Transport> {
-        match value {
-            "TCP" => Ok(Transport::Tcp),
-            "UDP" => Ok(Transport::Udp),
-            "SCTP" => Ok(Transport::Sctp),
-            _ => anyhow::bail!("unsupported transport"),
-        }
     };
     let compile_rules = |rules: Vec<Value>, peer_key: &str| -> Result<Vec<NetworkRule>> {
         let mut compiled = Vec::new();
@@ -271,21 +301,34 @@ pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
     );
     let incoming = SelectedDirection::compile(isolate_ingress, incoming)?;
     let outgoing = SelectedDirection::compile(isolate_egress, outgoing)?;
-    let view = match query.direction.as_str() {
-        "Ingress" => incoming,
-        "Egress" => outgoing,
+    Ok(CompiledPolicy {
+        namespace: namespace.to_owned(),
+        target,
+        incoming,
+        outgoing,
+    })
+}
+
+pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
+    ensure!(
+        bytes.len() <= 1024 * 1024,
+        "policy evaluation document too large"
+    );
+    let query: OfflineEvaluation = serde_json::from_slice(bytes)?;
+    let compiled = compile_policy(&query.policy)?;
+    let direction = match query.direction.as_str() {
+        "Ingress" => Direction::Ingress,
+        "Egress" => Direction::Egress,
         _ => anyhow::bail!("invalid direction"),
     };
-    let peer = guard_core::canonical_ip(&query.peer)?;
-    let protocol = transport(&query.protocol)?;
-    if namespace != query.namespace || !target.matches(&query.labels) {
-        return Ok("not_selected");
-    }
-    Ok(match view.decide(peer, protocol, query.port) {
-        NetworkDecision::NotIsolated => "not_isolated",
-        NetworkDecision::Allowed => "allowed",
-        NetworkDecision::Denied => "denied",
-    })
+    Ok(compiled.decide(
+        &query.namespace,
+        &query.labels,
+        direction,
+        guard_core::canonical_ip(&query.peer)?,
+        transport(&query.protocol)?,
+        query.port,
+    ))
 }
 
 #[cfg(test)]
@@ -296,6 +339,53 @@ mod tests {
     }
     fn evaluate(value: &serde_json::Value) -> Result<&'static str> {
         evaluate_policy(&serde_json::to_vec(value)?)
+    }
+    #[test]
+    fn compiled_policy_owns_immutable_candidate_and_reuses_decisions() {
+        let mut source =
+            query(serde_json::json!({"podSelector":{},"ingress":[{"ports":[{"port":443}]}]}));
+        let old = compile_policy(&source["policy"]).unwrap();
+        source["policy"]["spec"]["ingress"] = serde_json::json!([]);
+        let next = compile_policy(&source["policy"]).unwrap();
+        let labels = BTreeMap::new();
+        let peer = "192.0.2.1".parse().unwrap();
+        for _ in 0..1000 {
+            assert_eq!(
+                old.decide(
+                    "blue",
+                    &labels,
+                    Direction::Ingress,
+                    peer,
+                    Transport::Tcp,
+                    443
+                ),
+                "allowed"
+            );
+            assert_eq!(
+                next.decide(
+                    "blue",
+                    &labels,
+                    Direction::Ingress,
+                    peer,
+                    Transport::Tcp,
+                    443
+                ),
+                "denied"
+            );
+        }
+        source["policy"]["spec"]["ingress"] = serde_json::json!([{"unsupported":true}]);
+        assert!(compile_policy(&source["policy"]).is_err());
+        assert_eq!(
+            old.decide(
+                "blue",
+                &labels,
+                Direction::Ingress,
+                peer,
+                Transport::Tcp,
+                444
+            ),
+            "denied"
+        );
     }
     #[test]
     fn policy_direction_defaults_and_empty_rules() {
