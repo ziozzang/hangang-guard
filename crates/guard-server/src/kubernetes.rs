@@ -445,7 +445,13 @@ mod tests {
             std::sync::Arc::new(snapshot),
         )));
         let (_stop, rx) = tokio::sync::watch::channel(true);
-        follow_source(std::path::PathBuf::from("/unused"), snapshots.clone(), rx).await;
+        follow_source(
+            std::path::PathBuf::from("/unused"),
+            snapshots.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            rx,
+        )
+        .await;
         assert!(snapshots.load_full().is_none());
     }
     #[test]
@@ -888,6 +894,7 @@ pub(crate) async fn observe_source(bytes: &[u8]) -> Result<serde_json::Value> {
 pub(crate) async fn follow_source(
     path: std::path::PathBuf,
     snapshots: std::sync::Arc<arc_swap::ArcSwapOption<SourceSnapshot>>,
+    phase: std::sync::Arc<std::sync::atomic::AtomicU8>,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) {
     loop {
@@ -895,16 +902,25 @@ pub(crate) async fn follow_source(
             break;
         }
         // Conservative uncertainty fencing while a complete list is assembled.
+        phase.store(1, std::sync::atomic::Ordering::Release);
         snapshots.store(None);
         let result = async {
             let bytes = crate::read_bounded(&path, 16384)?;
             collect_source(&bytes).await
         };
         tokio::select! {
-            value=result => if let Ok(snapshot)=value && std::time::Instant::now()<snapshot.expires {snapshots.store(Some(std::sync::Arc::new(snapshot)));},
+            value=result => {
+                if let Ok(snapshot)=value && std::time::Instant::now()<snapshot.expires {
+                    snapshots.store(Some(std::sync::Arc::new(snapshot)));
+                    phase.store(2,std::sync::atomic::Ordering::Release);
+                } else {
+                    phase.store(3,std::sync::atomic::Ordering::Release);
+                }
+            },
             _=stop.changed()=>break,
         }
         tokio::select! { _=tokio::time::sleep(std::time::Duration::from_millis(500))=>{}, _=stop.changed()=>break }
     }
     snapshots.store(None);
+    phase.store(4, std::sync::atomic::Ordering::Release);
 }

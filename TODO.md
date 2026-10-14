@@ -411,3 +411,16 @@ are preserved. Production Kubernetes source remains unconfigured; no release tag
 or GitHub Actions activation changed. This rollout includes compilation-deadline
 refusal and expired diagnostic status refusal. Full network source enforcement,
 selector peer resolution, watch continuity and distributed source ownership remain.
+
+## Safe source diagnostic lifecycle states
+
+Admin status errors now distinguish disabled, collecting, failed and stopped
+source states with bounded static labels; they never expose source configuration,
+raw upstream errors or credentials. Snapshot validity remains the authority gate,
+independent of diagnostic phase metadata. The UI replaces old success and displays
+the safe failure reason; generated plugin v0.1.3 has regenerated asset hashes.
+All 32 server tests and strict clippy pass. Actual Kubernetes follower failure
+sampling checks status/evaluation 503 with failed/collecting state and activated
+false, plus recovery and all earlier source lifecycle gates. Chromium mock-context
+qualification confirms reason display and locale/disposal. Production backend and
+plugin remain at the previous qualified deployment pending rollout of this change.

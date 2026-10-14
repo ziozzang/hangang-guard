@@ -83,7 +83,7 @@ css='''/* Use the host console's typography, theme and layout tokens. */
 (output/'style.css').write_text(css)
 routes=[('kubernetes/status','GET',False),('kubernetes/evaluate','POST',False),('status','GET',False),('policy','GET',False),('policy','PUT',True),('candidates','GET',False),('candidates/approve','POST',True),('blocks','GET',False),('blocks','POST',True),('blocks','DELETE',True),('lookup','POST',False),('networks/inspect','POST',False),('rules','GET',False),('rules','PUT',True),('rules/lua','PUT',True),('rules/validate','POST',False),('geoip/reload','POST',True),('update/status','GET',False),('update/check','POST',True)]
 assets={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in sorted(output.iterdir()) if f.name in ['index.js','panel.html','style.css']}
-manifest={'id':'guard','name':'Sumunjang (수문장)','version':'0.1.2','api_version':1,'entry':'index.js','assets':assets,'routes':[{'path':p,'method':m,'mutation':w} for p,m,w in routes]}
+manifest={'id':'guard','name':'Sumunjang (수문장)','version':'0.1.3','api_version':1,'entry':'index.js','assets':assets,'routes':[{'path':p,'method':m,'mutation':w} for p,m,w in routes]}
 (output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 for file in output.iterdir():
  if file.is_file(): file.chmod(0o644)

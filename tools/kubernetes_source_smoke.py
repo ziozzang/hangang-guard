@@ -93,6 +93,9 @@ def main():
                     time.sleep(1.1)
                     for _ in range(8):
                         if call('/v1/kubernetes/evaluate',body=query)[0]!=503:raise RuntimeError('follower retained authority after source failure')
+                        status,body=call('/v1/kubernetes/status')
+                        if status!=503 or body.get('state') not in ['failed','collecting'] or body.get('activated') is not False:
+                            raise RuntimeError('follower failure state missing or misleading')
                         time.sleep(.1)
                     config['token_env']='OWNED_SUM_SOURCE_TOKEN';replacement.write_text(json.dumps(config));replacement.replace(path)
                     wait_for_decision()

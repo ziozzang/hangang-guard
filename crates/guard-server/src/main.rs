@@ -116,6 +116,7 @@ struct App {
     update_status: Option<PathBuf>,
     update_request: Option<PathBuf>,
     network_source: Arc<arc_swap::ArcSwapOption<kubernetes::SourceSnapshot>>,
+    network_source_phase: Arc<std::sync::atomic::AtomicU8>,
 }
 impl App {
     fn query<'a>(
@@ -163,10 +164,22 @@ fn authorize(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, Json<V
 }
 async fn network_source_status(HttpState(app): HttpState<App>, headers: HeaderMap) -> ApiResult {
     authorize(&headers, &app.admin)?;
-    let snapshot = app
-        .network_source
-        .load_full()
-        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "source unavailable"))?;
+    let snapshot = app.network_source.load_full().ok_or_else(|| {
+        let state = match app
+            .network_source_phase
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            0 => "disabled",
+            1 => "collecting",
+            3 => "failed",
+            4 => "stopped",
+            _ => "unavailable",
+        };
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":format!("source {state}"),"state":state,"activated":false})),
+        )
+    })?;
     let report = snapshot.report();
     if report["fresh"] != true {
         return Err(error(
@@ -907,6 +920,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let geo = geoip::GeoCatalog::load(&geo_paths)?;
     let app = App {
         network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
+        network_source_phase: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         geo: Arc::new(arc_swap::ArcSwap::from_pointee(geo)),
         geo_paths: Arc::new(geo_paths),
         geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -931,6 +945,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         tokio::spawn(kubernetes::follow_source(
             path,
             app.network_source.clone(),
+            app.network_source_phase.clone(),
             stop_rx.clone(),
         ));
     }
@@ -1050,6 +1065,7 @@ mod tests {
             .unwrap();
         App {
             network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
+            network_source_phase: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             geo: Arc::new(arc_swap::ArcSwap::from_pointee(geoip::GeoCatalog::default())),
             geo_paths: Arc::new(geoip::GeoPaths::default()),
             geo_reload: Arc::new(tokio::sync::Semaphore::new(1)),
