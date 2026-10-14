@@ -14,15 +14,18 @@ import sys
 import tempfile
 import time
 import grpc
-from update_smoke import children, eventually, free_port, request
+from update_smoke import children, eventually, free_port, request as plaintext_request
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', default='target/debug/sumunjang', type=Path)
     parser.add_argument('--hangang-client', type=Path)
+    parser.add_argument('--management-mtls', action='store_true')
+    parser.add_argument('--hangang-binary', type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix='sumunjang-grpc-owned-') as temporary:
         root = Path(temporary)
         root.chmod(0o700)
@@ -32,7 +35,7 @@ def main():
             run('openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(root/f'{name}.key'), '-out', str(root/f'{name}.csr'), '-subj', f'/CN={name}')
             if ca:
                 ext = root/f'{name}.ext'
-                ext.write_text(f'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage={usage}\nsubjectAltName=DNS:sumunjang.example.test\n')
+                ext.write_text(f'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage={usage}\nsubjectAltName=DNS:sumunjang.example.test,IP:127.0.0.1\n')
                 run('openssl', 'x509', '-req', '-in', str(root/f'{name}.csr'), '-CA', str(root/f'{ca}.pem'), '-CAkey', str(root/f'{ca}.key'), '-CAcreateserial', '-days', '1', '-extfile', str(ext), '-out', str(root/f'{name}.pem'))
             else:
                 run('openssl', 'req', '-x509', '-key', str(root/f'{name}.key'), '-in', str(root/f'{name}.csr'), '-days', '1', '-out', str(root/f'{name}.pem'), '-addext', 'basicConstraints=critical,CA:TRUE')
@@ -84,13 +87,38 @@ def main():
                 assert exact(sock, 4) == b'HGA1'
                 sock.sendall(bytes([1, 4, 0, 0])+struct.pack('!I', 42)+socket.inet_aton(ip)+bytes(12))
                 return exact(sock, 24)
-        api = f'http://127.0.0.1:{http}'
+        api = f'{"https" if args.management_mtls else "http"}://127.0.0.1:{http}'
+        if args.management_mtls:
+            argv += ['--management-tls']
+        def request(base, path, token=None, data=None, method=None):
+            if not args.management_mtls:
+                return plaintext_request(base,path,token,data,method)
+            import json
+            import urllib.request
+            import urllib.error
+            context=ssl.create_default_context(cafile=str(root/'ca.pem'))
+            context.load_cert_chain(str(root/'client.pem'),str(root/'client.key'))
+            headers={'Content-Type':'application/json'}
+            if token:headers['Authorization']='Bearer '+token
+            req=urllib.request.Request(base+path,headers=headers,data=None if data is None else json.dumps(data).encode(),method=method)
+            try:
+                with urllib.request.urlopen(req,context=context,timeout=2) as response:return response.status,json.loads(response.read())
+            except urllib.error.HTTPError as response:return response.code,json.loads(response.read())
+
         with (root/'server.log').open('wb') as log:
             proc = subprocess.Popen(argv, env=env, stdout=log, stderr=log)
             ch = channel()
             try:
                 eventually(lambda: proc.poll() is None and request(api, '/healthz')[0] == 200, 'server readiness')
                 assert request(api, '/v1/policy', admin)[1]['allow'] == ['192.0.2.99/32']
+                if args.management_mtls:
+                    assert request(api,'/v1/policy',collector)[0]==401
+                    anonymous=ssl.create_default_context(cafile=str(root/'ca.pem'))
+                    try:
+                        with anonymous.wrap_socket(socket.create_connection(('127.0.0.1',http),timeout=1),server_hostname='127.0.0.1') as sock:
+                            sock.sendall(b'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n')
+                            assert not sock.recv(1024),'anonymous HTTPS accepted'
+                    except (ssl.SSLError,ConnectionResetError):pass
                 grpc.channel_ready_future(ch).result(timeout=5)
                 stub = rpc.NetworkStub(ch)
                 msg = pb.NetworkRequest(request_id=42, ip=socket.inet_aton('192.0.2.1'))
@@ -103,6 +131,42 @@ def main():
                 for identity, hostname in [(None, 'sumunjang.example.test'), ('untrusted', 'sumunjang.example.test'), ('client', 'wrong.example.test')]:
                     with channel(identity, hostname) as bad:
                         rejected(rpc.NetworkStub(bad), msg, [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+                if args.hangang_binary:
+                    assert args.management_mtls,'plugin delegation fixture requires HTTPS backend'
+                    import json, hashlib
+                    entry=b'export function mount(){}'
+                    (root/'index.js').write_bytes(entry)
+                    manifest={'id':'sumunjang','name':'Sumunjang','version':'0.3.4','api_version':1,'entry':'index.js','assets':{'index.js':hashlib.sha256(entry).hexdigest()},'routes':[{'path':'policy','method':'GET','mutation':False},{'path':'policy','method':'PUT','mutation':True}]}
+                    encoded=json.dumps(manifest).encode();(root/'manifest.json').write_bytes(encoded)
+                    plugin={'id':'sumunjang','directory':str(root),'manifest_sha256':hashlib.sha256(encoded).hexdigest(),'backend':api,'token_env':'HANGANG_GUARD_ADMIN_TOKEN','tls':{'server_name':'sumunjang.example.test','ca':str(root/'ca.pem'),'certificate':str(root/'client.pem'),'key':str(root/'client.key')}}
+                    (root/'plugins.json').write_text(json.dumps({'plugins':[plugin]}))
+                    (root/'hangang.json').write_text('{}')
+                    console_port,public_port=free_port(),free_port()
+                    front=f'http://127.0.0.1:{console_port}'
+                    front_env=dict(env,HANGANG_ADMIN_TOKEN=secrets.token_hex(32))
+                    with (root/'hangang.log').open('wb') as front_log:
+                        gateway=subprocess.Popen([str(args.hangang_binary.resolve()),'--config',str(root/'hangang.json'),'--admin-plugins',str(root/'plugins.json'),'--listen',f'127.0.0.1:{public_port}','--admin',f'127.0.0.1:{console_port}','--threads','2','--lua-workers','1','--drain-seconds','1'],env=front_env,stdout=front_log,stderr=front_log)
+                        try:
+                            def front_ready():
+                                if gateway.poll() is not None:
+                                    diagnostic=(root/'hangang.log').read_text()
+                                    for value in [*env.values(),front_env['HANGANG_ADMIN_TOKEN']]:
+                                        if len(value)>=16:diagnostic=diagnostic.replace(value,'[redacted]')
+                                    raise RuntimeError('owned console exited: '+diagnostic[-3000:])
+                                return plaintext_request(front,'/v1/config',front_env['HANGANG_ADMIN_TOKEN'])[0]==200
+                            eventually(front_ready,'owned console readiness')
+                            status,policy=plaintext_request(front,'/v1/plugins/sumunjang/policy',front_env['HANGANG_ADMIN_TOKEN'])
+                            assert status==200 and policy['mode']=='observe','mTLS plugin read delegation'
+                            status,_=plaintext_request(front,'/v1/plugins/sumunjang/policy',front_env['HANGANG_ADMIN_TOKEN'],{'mode':'enforce','allow':[]},'PUT')
+                            assert status==200,'mTLS plugin mutation delegation'
+                            assert request(api,'/v1/policy',admin)[1]['mode']=='enforce'
+                            # Restore initial mode for the remaining protocol parity checks.
+                            assert request(api,'/v1/policy',admin,{'mode':'observe','allow':[]},'PUT')[0]==200
+                            print('PASS: actual Hangang pinned console plugin reads and mutates the independent Sumunjang authority over mTLS')
+                        finally:
+                            gateway.terminate()
+                            try:gateway.wait(timeout=10)
+                            except subprocess.TimeoutExpired:gateway.kill();gateway.wait()
                 assert check().mode == 1  # Observe is never reported as enforcement.
                 assert request(api, '/v1/policy', admin, {'mode': 'enforce', 'allow': ['192.0.2.2/32']}, 'PUT')[0] == 200
                 assert request(api, '/v1/blocks', admin, {'network': '192.0.2.1/32', 'expires_at': int(time.time())+600, 'reason': 'owned fixture'})[0] == 200
@@ -132,6 +196,8 @@ def main():
                         return False
                 eventually(replaced, 'gRPC listener handover and durable decision')
                 assert native_check('192.0.2.1')[1] == 1
+                if args.hangang_client and args.management_mtls:
+                    raise AssertionError('gateway fixture uses the plaintext owned management adapter')
                 if args.hangang_client:
                     subprocess.run([str(args.hangang_client.resolve()), f'localhost:{transport}', api, str(root/'ca.pem'), str(root/'client.pem'), str(root/'client.key')], env=env, check=True, timeout=20)
                 assert request(api, '/v1/blocks', admin, {'network': '192.0.2.1/32'}, 'DELETE')[0] == 200

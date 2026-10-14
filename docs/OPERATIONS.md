@@ -83,3 +83,7 @@ same resource budget.
 ## Durable bootstrap policy
 
 Use `--bootstrap-policy /config/bootstrap.json` to seed a new database only. Once a checkpoint exists, its policy is authoritative and the bootstrap file is not read, including after supervised HUP. This is suitable for restartable deployments. `--policy` continues to explicitly reload policy at each start; the two options are mutually exclusive. Bootstrap input is bounded to 1 MiB. Invalid stored state fails startup rather than falling back to bootstrap.
+
+## Management mTLS
+
+`--management-tls` serves the management listener over mandatory client-certificate HTTPS using the configured decision TLS identity/CA. Decision TLS settings and their native listener are required. Collector/admin token roles still apply; a certificate does not grant policy write access. The shared HTTP/1.1 runtime bounds connections, handshake/header reads and shutdown drain. Supervised mode retains the management listener during HUP. Plain management remains available for explicitly loopback deployments. Do not expose plaintext management as a remote Service.

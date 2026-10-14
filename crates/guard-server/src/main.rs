@@ -84,6 +84,9 @@ struct Args {
     /// Additional gRPC network decisions; mTLS required.
     #[arg(long, requires_all = ["decision_tls_cert", "decision_listen"])]
     grpc_listen: Option<std::net::SocketAddr>,
+    /// Serve management HTTP over mandatory mTLS using the decision TLS identity.
+    #[arg(long, requires = "decision_tls_cert")]
+    management_tls: bool,
     #[arg(long, requires_all = ["decision_tls_key", "decision_client_ca", "decision_listen"])]
     decision_tls_cert: Option<PathBuf>,
     #[arg(long, requires = "decision_tls_cert")]
@@ -749,6 +752,13 @@ fn check_configuration(args: &Args) -> anyhow::Result<()> {
             16 * 1024 * 1024,
         )?)?)?;
     }
+    if let Some(cert) = &args.decision_tls_cert {
+        protocol::tls_acceptor(
+            cert,
+            args.decision_tls_key.as_ref().unwrap(),
+            args.decision_client_ca.as_ref().unwrap(),
+        )?;
+    }
     geoip::GeoCatalog::load(&geoip::GeoPaths {
         country: args.geoip_database.clone(),
         asn: args.geoip_asn_database.clone(),
@@ -851,6 +861,16 @@ async fn run(args: Args) -> anyhow::Result<()> {
             "remote binary decision listener requires mTLS"
         );
     }
+    let management_tls = if args.management_tls {
+        Some(hangang_runtime::tls_config(
+            args.decision_tls_cert.as_ref().unwrap(),
+            args.decision_tls_key.as_ref().unwrap(),
+            args.decision_client_ca.as_ref().unwrap(),
+            &[b"http/1.1"],
+        )?)
+    } else {
+        None
+    };
     let decision_tls = args
         .decision_tls_cert
         .as_ref()
@@ -1054,21 +1074,27 @@ async fn run(args: Args) -> anyhow::Result<()> {
     };
     eprintln!("sumunjang listening on {}", listener.local_addr()?);
     let shutdown_stop = stop_tx.clone();
-    let listener = listener.tap_io(|stream| {
-        if let Err(e) = stream.set_nodelay(true) {
-            eprintln!("HTTP TCP_NODELAY failed: {e}");
-        }
-    });
     if args.serve_child {
         #[cfg(target_os = "linux")]
         supervisor::notify_ready()?;
     }
-    let serving = axum::serve(listener, router(app.clone()))
-        .with_graceful_shutdown(async move {
-            shutdown().await;
-            let _ = shutdown_stop.send(true);
-        })
-        .await;
+    let stopping = async move {
+        shutdown().await;
+        let _ = shutdown_stop.send(true);
+    };
+    let serving = if let Some(config) = management_tls {
+        hangang_runtime::serve_https(listener, config, router(app.clone()), stopping).await
+    } else {
+        let listener = listener.tap_io(|stream| {
+            if let Err(e) = stream.set_nodelay(true) {
+                eprintln!("HTTP TCP_NODELAY failed: {e}");
+            }
+        });
+        axum::serve(listener, router(app.clone()))
+            .with_graceful_shutdown(stopping)
+            .await
+            .map_err(anyhow::Error::from)
+    };
     let _ = stop_tx.send(true);
     let _ = worker.await;
     if let Some(worker) = binary_worker {
