@@ -159,3 +159,16 @@ compares 12 accepted/rejected syntax boundary cases against the actual API and t
 real Sumunjang offline command; all agree. Kubernetes objects are dry-run only,
 not persisted. Server selector tests and strict clippy pass. This qualification
 covers selector syntax, not collection, reconciliation or NetworkPolicy execution.
+
+## Offline NetworkPolicy evaluation adapter
+
+The server now parses networking.k8s.io/v1 NetworkPolicy target selectors,
+namespace scope, policyTypes defaults, ingress/egress rules, ipBlock exceptions,
+numeric ports/ranges and TCP/UDP/SCTP into the core evaluator. An offline fixture
+contains `policy`, `namespace`, `labels`, `direction`, `peer`, `protocol`, `port`;
+`--evaluate-kubernetes-policy FILE` reports not_selected, not_isolated, allowed
+or denied without DB/listeners. Inputs are bounded to 1 MiB. Unknown spec/rule
+fields, selector peers, explicit empty peers, named ports and contradictory
+rules/types are explicitly refused, not broadened. This is a supported subset,
+not complete Kubernetes conformance or runtime enforcement. Actual API collection,
+peer materialization, UID/source freshness and Hangang context remain open.

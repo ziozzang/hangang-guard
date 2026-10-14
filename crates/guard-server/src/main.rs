@@ -37,6 +37,9 @@ struct Args {
     /// Validate a Kubernetes LabelSelector JSON file without DB or listeners.
     #[arg(long)]
     check_kubernetes_selector: Option<PathBuf>,
+    /// Evaluate an owned offline NetworkPolicy/query fixture without activating it.
+    #[arg(long)]
+    evaluate_kubernetes_policy: Option<PathBuf>,
     /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
     #[arg(long)]
     check: bool,
@@ -719,6 +722,13 @@ fn worker_arguments() -> Vec<std::ffi::OsString> {
 }
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(path) = &args.evaluate_kubernetes_policy {
+        println!(
+            "{}",
+            kubernetes::evaluate_policy(&read_bounded(path, 1024 * 1024)?)?
+        );
+        return Ok(());
+    }
     if let Some(path) = &args.check_kubernetes_selector {
         kubernetes::compile_selector(&read_bounded(path, 65536)?)?;
         println!("Kubernetes selector shape, label syntax and predicate bounds: valid");

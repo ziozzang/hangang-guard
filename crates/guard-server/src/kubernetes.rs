@@ -88,9 +88,263 @@ pub(crate) fn compile_selector(bytes: &[u8]) -> Result<LabelSelector> {
     }
     LabelSelector::compile(requirements)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OfflineEvaluation {
+    policy: serde_json::Value,
+    namespace: String,
+    labels: BTreeMap<String, String>,
+    direction: String,
+    peer: String,
+    protocol: String,
+    port: u16,
+}
+/// Offline fixture evaluation only. Selector peers and named ports are refused
+/// until their authoritative object resolution is implemented.
+pub(crate) fn evaluate_policy(bytes: &[u8]) -> Result<&'static str> {
+    use guard_core::network_policy::{
+        IpBlock, NetworkDecision, NetworkRule, PortRange, SelectedDirection, Transport,
+    };
+    use serde_json::Value;
+    ensure!(
+        bytes.len() <= 1024 * 1024,
+        "policy evaluation document too large"
+    );
+    let query: OfflineEvaluation = serde_json::from_slice(bytes)?;
+    let policy = &query.policy;
+    ensure!(
+        policy["apiVersion"] == "networking.k8s.io/v1" && policy["kind"] == "NetworkPolicy",
+        "wrong policy kind/version"
+    );
+    let namespace = policy["metadata"]["namespace"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("policy namespace required"))?;
+    let spec = policy["spec"]
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("policy spec required"))?;
+    ensure!(
+        spec.keys()
+            .all(|k| ["podSelector", "policyTypes", "ingress", "egress"].contains(&k.as_str())),
+        "unsupported policy field"
+    );
+    let target = compile_selector(&serde_json::to_vec(
+        spec.get("podSelector")
+            .ok_or_else(|| anyhow::anyhow!("podSelector required"))?,
+    )?)?;
+    let list = |key: &str| -> Result<Vec<Value>> {
+        match spec.get(key) {
+            None => Ok(vec![]),
+            Some(Value::Array(values)) => {
+                ensure!(values.len() <= 4096, "too many policy rules");
+                Ok(values.clone())
+            }
+            _ => anyhow::bail!("policy rule list required"),
+        }
+    };
+    let ingress = list("ingress")?;
+    let egress = list("egress")?;
+    let (isolate_ingress, isolate_egress) = match spec.get("policyTypes") {
+        None => (true, !egress.is_empty()),
+        Some(Value::Array(types)) if types.is_empty() => (true, !egress.is_empty()),
+        Some(Value::Array(types)) => {
+            ensure!(
+                types.len() <= 2 && types.iter().all(|t| t == "Ingress" || t == "Egress"),
+                "invalid policyTypes"
+            );
+            ensure!(
+                types.len() != 2 || types[0] != types[1],
+                "duplicate policyTypes"
+            );
+            (
+                types.iter().any(|t| t == "Ingress"),
+                types.iter().any(|t| t == "Egress"),
+            )
+        }
+        _ => anyhow::bail!("invalid policyTypes"),
+    };
+    let transport = |value: &str| -> Result<Transport> {
+        match value {
+            "TCP" => Ok(Transport::Tcp),
+            "UDP" => Ok(Transport::Udp),
+            "SCTP" => Ok(Transport::Sctp),
+            _ => anyhow::bail!("unsupported transport"),
+        }
+    };
+    let compile_rules = |rules: Vec<Value>, peer_key: &str| -> Result<Vec<NetworkRule>> {
+        let mut compiled = Vec::new();
+        for rule in rules {
+            let rule = rule
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("rule must be object"))?;
+            ensure!(
+                rule.keys().all(|k| k == peer_key || k == "ports"),
+                "unsupported rule field"
+            );
+            let mut peers = Vec::new();
+            if let Some(values) = rule.get(peer_key) {
+                let values = values
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("peer list required"))?;
+                ensure!(values.len() <= 4096, "too many peers");
+                for peer in values {
+                    let peer = peer
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("peer object required"))?;
+                    ensure!(
+                        peer.len() == 1 && peer.contains_key("ipBlock"),
+                        "selector/all peers require explicit resolution"
+                    );
+                    let block = peer["ipBlock"]
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("ipBlock required"))?;
+                    ensure!(
+                        block.keys().all(|k| k == "cidr" || k == "except"),
+                        "unsupported ipBlock field"
+                    );
+                    let cidr = block
+                        .get("cidr")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow::anyhow!("CIDR required"))?;
+                    let except: Vec<String> = match block.get("except") {
+                        None => vec![],
+                        Some(v) => serde_json::from_value(v.clone())?,
+                    };
+                    peers.push(IpBlock::compile(cidr, &except)?);
+                }
+            }
+            let mut ports = Vec::new();
+            if let Some(values) = rule.get("ports") {
+                let values = values
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("ports list required"))?;
+                ensure!(values.len() <= 4096, "too many ports");
+                for port in values {
+                    let port = port
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("port object required"))?;
+                    ensure!(
+                        port.keys()
+                            .all(|k| ["protocol", "port", "endPort"].contains(&k.as_str())),
+                        "unsupported port field"
+                    );
+                    let protocol = transport(match port.get("protocol") {
+                        None => "TCP",
+                        Some(v) => v
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("invalid protocol"))?,
+                    })?;
+                    let number = |v: &Value| -> Result<u16> {
+                        Ok(u16::try_from(v.as_u64().ok_or_else(|| {
+                            anyhow::anyhow!("numeric port required")
+                        })?)?)
+                    };
+                    let (first, last) = match port.get("port") {
+                        None => {
+                            ensure!(!port.contains_key("endPort"), "endPort without port");
+                            (1, 65535)
+                        }
+                        Some(v) => {
+                            let first = number(v)?;
+                            let last = match port.get("endPort") {
+                                None => first,
+                                Some(v) => number(v)?,
+                            };
+                            (first, last)
+                        }
+                    };
+                    ports.push(PortRange::new(protocol, first, last)?);
+                }
+            }
+            compiled.push(NetworkRule::new(peers, ports)?);
+        }
+        Ok(compiled)
+    };
+    let incoming = compile_rules(ingress, "from")?;
+    let outgoing = compile_rules(egress, "to")?;
+    ensure!(
+        isolate_ingress || incoming.is_empty(),
+        "ingress rules without ingress policy type"
+    );
+    ensure!(
+        isolate_egress || outgoing.is_empty(),
+        "egress rules without egress policy type"
+    );
+    let incoming = SelectedDirection::compile(isolate_ingress, incoming)?;
+    let outgoing = SelectedDirection::compile(isolate_egress, outgoing)?;
+    let view = match query.direction.as_str() {
+        "Ingress" => incoming,
+        "Egress" => outgoing,
+        _ => anyhow::bail!("invalid direction"),
+    };
+    let peer = guard_core::canonical_ip(&query.peer)?;
+    let protocol = transport(&query.protocol)?;
+    if namespace != query.namespace || !target.matches(&query.labels) {
+        return Ok("not_selected");
+    }
+    Ok(match view.decide(peer, protocol, query.port) {
+        NetworkDecision::NotIsolated => "not_isolated",
+        NetworkDecision::Allowed => "allowed",
+        NetworkDecision::Denied => "denied",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn query(spec: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"policy":{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"namespace":"blue"},"spec":spec},"namespace":"blue","labels":{"role":"client"},"direction":"Ingress","peer":"192.0.2.70","protocol":"TCP","port":443})
+    }
+    fn evaluate(value: &serde_json::Value) -> Result<&'static str> {
+        evaluate_policy(&serde_json::to_vec(value)?)
+    }
+    #[test]
+    fn policy_direction_defaults_and_empty_rules() {
+        let mut q = query(serde_json::json!({"podSelector":{}}));
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["direction"] = "Egress".into();
+        assert_eq!(evaluate(&q).unwrap(), "not_isolated");
+        q["policy"]["spec"]["egress"] = serde_json::json!([{}]);
+        assert_eq!(evaluate(&q).unwrap(), "allowed");
+        q["policy"]["spec"]["egress"] = serde_json::json!([]);
+        q["policy"]["spec"]["policyTypes"] = serde_json::json!(["Egress"]);
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["namespace"] = "other".into();
+        assert_eq!(evaluate(&q).unwrap(), "not_selected");
+    }
+    #[test]
+    fn policy_ipblock_and_ports_are_evaluated_together() {
+        let mut q = query(
+            serde_json::json!({"podSelector":{"matchLabels":{"role":"client"}},"ingress":[{"from":[{"ipBlock":{"cidr":"192.0.2.0/24","except":["192.0.2.64/26"]}}]},{"from":[{"ipBlock":{"cidr":"192.0.2.64/26"}}],"ports":[{"port":443,"endPort":444}]}]}),
+        );
+        assert_eq!(evaluate(&q).unwrap(), "allowed");
+        q["port"] = 445.into();
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["port"] = 443.into();
+        q["protocol"] = "UDP".into();
+        assert_eq!(evaluate(&q).unwrap(), "denied");
+        q["peer"] = "192.0.2.1".into();
+        assert_eq!(evaluate(&q).unwrap(), "allowed");
+        q["labels"]["role"] = "server".into();
+        assert_eq!(evaluate(&q).unwrap(), "not_selected");
+    }
+    #[test]
+    fn unsupported_policy_never_becomes_wildcard() {
+        for rule in [
+            serde_json::json!({"from":[{"podSelector":{}}]}),
+            serde_json::json!({"from":[{}]}),
+            serde_json::json!({"ports":[{"port":"https"}]}),
+            serde_json::json!({"ports":[{"endPort":443}]}),
+            serde_json::json!({"ports":[{"port":0}]}),
+            serde_json::json!({"unknown":true}),
+        ] {
+            assert!(
+                evaluate(&query(
+                    serde_json::json!({"podSelector":{},"ingress":[rule]})
+                ))
+                .is_err()
+            );
+        }
+    }
     #[test]
     fn kubernetes_label_syntax_boundaries() {
         for key in [

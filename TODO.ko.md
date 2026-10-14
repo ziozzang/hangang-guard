@@ -162,3 +162,15 @@ NetworkPolicy 연결은 남아 있습니다. 이전 문법 검증 유보 기록�
 12개 허용·거부 경계 입력을 실제 API와 수문장 오프라인 명령에 비교하며 모두
 일치합니다. 리소스는 dry-run만 수행하고 저장하지 않습니다. 서버 선택자 테스트와
 Clippy가 통과했습니다. 선택자 문법 검증이며 수집·조정·NetworkPolicy 집행은 아닙니다.
+
+## 오프라인 NetworkPolicy 평가 어댑터
+
+서버에 networking.k8s.io/v1 NetworkPolicy 대상 선택자·Namespace 범위·policyTypes
+기본값·ingress/egress 규칙·ipBlock 예외·숫자 포트/범위·TCP/UDP/SCTP를 코어로
+변환하는 경로를 추가했습니다. 입력 fixture 필드는 policy·namespace·labels·
+direction·peer·protocol·port이며 `--evaluate-kubernetes-policy FILE`은 DB/리스너
+없이 not_selected·not_isolated·allowed·denied를 출력합니다. 입력은 1MiB로
+제한합니다. 알 수 없는 spec/규칙 필드, 선택자 peer, 명시적 빈 peer, named port와
+규칙/types 모순은 명시적으로 거부합니다. 지원 부분집합이며 전체 K8s 호환이나
+실행 중 집행은 아닙니다. 실제 API 수집·peer 구체화·UID/원천 신선도·한강 문맥
+연결은 남아 있습니다.
