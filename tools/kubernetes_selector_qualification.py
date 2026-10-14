@@ -72,7 +72,28 @@ def main():
                                     text=True, capture_output=True, timeout=5)
             if result.returncode or result.stdout.strip() != expected:
                 raise RuntimeError('API-defaulted policy evaluation mismatch: ' + label)
-    print('PASS: 12 selector syntax cases and 8 API-defaulted policy evaluations; no objects persisted; CNI enforcement not qualified')
+        invalid_peers = [
+            ('empty-peer', {}),
+            ('ipblock-with-selector', {'ipBlock': {'cidr': '192.0.2.0/24'}, 'podSelector': {}}),
+        ]
+        for label, peer in invalid_peers:
+            document = {'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy',
+                        'metadata': {'name': 'owned-policy-invalid-peer', 'namespace': 'default'},
+                        'spec': {'podSelector': {}, 'ingress': [{'from': [peer]}]}}
+            api = subprocess.run(['docker', 'exec', '-i', args.owned_container,
+                                  'kubectl', '--kubeconfig', '/etc/kubernetes/admin.conf',
+                                  'create', '--dry-run=server', '-f', '-', '-o', 'json'],
+                                 input=json.dumps(document), text=True, capture_output=True, timeout=15)
+            if api.returncode == 0 or 'invalid' not in api.stderr:
+                raise RuntimeError('owned API did not validate malformed peer: ' + label)
+            path.write_text(json.dumps({'policy': document, 'namespace': 'default', 'labels': {},
+                                        'direction': 'Ingress', 'peer': '192.0.2.70',
+                                        'protocol': 'TCP', 'port': 443}))
+            local = subprocess.run([binary, '--evaluate-kubernetes-policy', str(path)],
+                                   capture_output=True, timeout=5)
+            if local.returncode == 0:
+                raise RuntimeError('malformed peer accepted locally: ' + label)
+    print('PASS: 12 selector syntax cases and 8 API-defaulted policy evaluations and 2 malformed peer rejections; no objects persisted; CNI enforcement not qualified')
 
 
 

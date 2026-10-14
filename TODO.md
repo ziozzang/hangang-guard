@@ -184,3 +184,11 @@ packet enforcement is asserted. This bridges API-returned policy shape to the
 implemented evaluator; collection/watch, source freshness and runtime integration
 remain open. Run `python3 tools/kubernetes_selector_qualification.py --binary
 /path/to/sumunjang` against an owned qualification container.
+
+## Malformed peer API compatibility gate
+
+Owned Kubernetes server dry-run rejects `from: [{}]` (a peer must be specified)
+and a peer combining ipBlock with podSelector. The local evaluator's existing
+rejections agree; the maintained tool now checks both alongside the 20 positive/
+syntax cases. An empty ingress rule `{}` permits all peers, while an empty peer
+object is invalid. No empty-peer wildcard support was committed or deployed.

@@ -183,3 +183,11 @@ direction·peer·protocol·port이며 `--evaluate-kubernetes-policy FILE`은 DB/
 기존 선택자 문법 비교 12개와 함께 통과했습니다. 리소스를 저장하지 않고 CNI
 패킷 집행을 주장하지 않습니다. 실제 API 정책 구조와 구현된 평가기를 연결한
 검증이며 수집/watch·원천 신선도·실행 중 연결은 남았습니다.
+
+## 잘못된 peer의 실제 API 호환성
+
+소유한 K8s 서버 dry-run은 `from: [{}]`와 ipBlock·podSelector를 결합한 peer를
+거부합니다. 기존 로컬 평가기의 거부와 일치하며 검증 도구에 두 사례를 추가했습니다.
+기존 20개 문법/평가 사례도 통과합니다. 빈 ingress 규칙 `{}`는 전체 peer를
+허용하지만 빈 peer 객체는 유효하지 않습니다. 빈 peer wildcard 기능은 커밋하거나
+배포하지 않았습니다.
