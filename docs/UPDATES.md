@@ -201,3 +201,9 @@ signed; new clients prefer `sumunjang`, while older clients can continue updatin
 through the legacy pair. Partial primary pairs fail closed. Version preflight
 accepts either exact executable name only after signature verification. Repository
 URLs, protocol magic and credential environment names remain compatible.
+
+The release preparer also accepts Linux musl targets. Their archives use
+`linux-musl` in the name so they cannot replace GNU archives when assets are
+combined. Signed raw artifact filenames and payload targets retain the complete
+Rust target triple. Supporting staging for a target does not qualify that target;
+publish only artifacts with recorded build and functional verification.

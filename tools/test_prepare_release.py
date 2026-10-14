@@ -84,6 +84,17 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(list(self.output.glob(".release-payload-*")))
         self.assertNotIn(self.seed.read_bytes(), b"".join(p.read_bytes() for p in self.output.iterdir()))
 
+    def test_musl_and_gnu_assets_can_coexist_without_target_or_archive_collision(self):
+        names = set()
+        for target in ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"):
+            output = self.output / target
+            release.prepare(self.seed, output, target)
+            self.assertEqual(self.payloads[-2]["target"], target)
+            self.assertEqual(self.payloads[-1]["target"], target)
+            assets = {p.name for p in output.iterdir() if p.suffix != ".txt" and p.name != "SHA256SUMS"}
+            self.assertFalse(names & assets)
+            names.update(assets)
+
     def test_wrong_pinned_key_and_output_containing_seed_are_rejected(self):
         (self.root / "release-public-key.txt").write_text(base64.b64encode(b"x" * 32).decode())
         with self.assertRaisesRegex(ValueError, "does not match"):

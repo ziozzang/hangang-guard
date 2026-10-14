@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-unknown-linux-gnu"
 COMMON_BINARIES = ("sumunjang", "hangang-guard", "guard-release-sign")
 TARGETS = {
+    "x86_64-unknown-linux-musl": ("linux-musl", "amd64", COMMON_BINARIES),
+    "aarch64-unknown-linux-musl": ("linux-musl", "arm64", COMMON_BINARIES),
     "x86_64-unknown-linux-gnu": ("linux", "amd64", COMMON_BINARIES),
     "aarch64-unknown-linux-gnu": ("linux", "arm64", COMMON_BINARIES),
     "x86_64-apple-darwin": ("darwin", "amd64", COMMON_BINARIES),
