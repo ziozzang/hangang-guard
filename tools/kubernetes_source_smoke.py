@@ -4,9 +4,10 @@ import argparse, base64, json, os, secrets, subprocess, tempfile, socket, time, 
 from pathlib import Path
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);parser.add_argument('--owned-container',default='zerotrust-qualification-control-plane');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);parser.add_argument('--owned-container',default='zerotrust-qualification-control-plane');parser.add_argument('--kubectl',help='Explicit wrapper for an authorized remote test cluster');parser.add_argument('--api-origin',help='Direct cluster HTTPS origin for the scoped source credential');args=parser.parse_args()
+    if bool(args.kubectl)!=bool(args.api_origin):parser.error('--kubectl and --api-origin must be supplied together')
     binary=str(Path(args.binary).resolve());namespace='owned-sum-source-'+secrets.token_hex(5)
-    prefix=['docker','exec','-i',args.owned_container,'kubectl','--kubeconfig','/etc/kubernetes/admin.conf']
+    prefix=[str(Path(args.kubectl).resolve())] if args.kubectl else ['docker','exec','-i',args.owned_container,'kubectl','--kubeconfig','/etc/kubernetes/admin.conf']
     def kubectl(*words,document=None):
         result=subprocess.run(prefix+list(words),input=None if document is None else json.dumps(document),text=True,capture_output=True,timeout=20)
         if result.returncode:raise RuntimeError('owned Kubernetes fixture command failed')
@@ -20,13 +21,18 @@ def main():
                  {'apiVersion':'networking.k8s.io/v1','kind':'NetworkPolicy','metadata':{'name':'default-deny','namespace':namespace},'spec':{'podSelector':{},'policyTypes':['Ingress']}}]
         kubectl('create','-f','-',document={'apiVersion':'v1','kind':'List','items':objects})
         token=kubectl('create','token','reader','-n',namespace,'--duration=600s').strip()
-        kubeconfig=json.loads(kubectl('config','view','--raw','-o','json'))
-        ca=base64.b64decode(kubeconfig['clusters'][0]['cluster']['certificate-authority-data'])
-        address=subprocess.check_output(['docker','port',args.owned_container,'6443/tcp'],text=True).strip().splitlines()[0]
-        if not address.startswith('127.0.0.1:'):raise RuntimeError('owned API must be loopback')
+        if args.kubectl:
+            root_ca=json.loads(kubectl('get','configmap','kube-root-ca.crt','-n',namespace,'-o','json'))
+            ca=root_ca['data']['ca.crt'].encode();api_origin=args.api_origin
+        else:
+            kubeconfig=json.loads(kubectl('config','view','--raw','-o','json'))
+            ca=base64.b64decode(kubeconfig['clusters'][0]['cluster']['certificate-authority-data'])
+            address=subprocess.check_output(['docker','port',args.owned_container,'6443/tcp'],text=True).strip().splitlines()[0]
+            if not address.startswith('127.0.0.1:'):raise RuntimeError('owned API must be loopback')
+            api_origin='https://'+address
         with tempfile.TemporaryDirectory(prefix='owned-sum-source-') as root:
             root=Path(root);(root/'ca.pem').write_bytes(ca)
-            config={'api':'https://'+address,'namespace':namespace,'ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}
+            config={'api':api_origin,'namespace':namespace,'ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}
             path=root/'source.json';path.write_text(json.dumps(config))
             def observe(secret):
                 return subprocess.run([binary,'--observe-kubernetes-policy',str(path)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=secret),capture_output=True,text=True,timeout=5)

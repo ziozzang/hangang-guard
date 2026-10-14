@@ -454,3 +454,19 @@ Namespace의 허용이 섞이지 않습니다. 컴파일·인덱스 생성은 �
 차이를 검증했고 코어 29개·서버 어댑터 11개·Clippy가 통과했습니다. 실제 선택자
 구체화는 추가로 필요하며 타입 기반만으로 구현/운영 집행 완료를 주장하지 않습니다.
 운영 백엔드는 유지합니다.
+
+## 사용자 지정 원격 k3s 검증·디스크 관리
+
+원천 smoke에 명시적 kubectl wrapper·직접 HTTPS API Origin을 추가했습니다.
+Namespace의 kube-root-ca.crt와 list-only ServiceAccount 토큰으로 연결하며 관리
+kubeconfig/토큰은 출력하지 않습니다. 지정 원격 k3s v1.37.1+k3s1에서 129개 정책
+페이지/삭제/UID 재생성/삭제 진행 거부·자격/RBAC 경계·로컬 follower 실패/복구/관리
+인증이 통과했습니다. 임시 Namespace를 삭제했고 노드·DNS·기존 HTTP/서비스도
+정상입니다. 원격 원천 연계 검증이며 네 모듈 Pod 배포·CNI 집행 검증은 아닙니다.
+운영 기록은 관리 workspace에 보관하고 공개 예제에 실제 호스트 목록은 넣지 않습니다.
+
+`tools/clean_build_cache.py`는 기본 조회, --apply에서 명시적 Cargo 리포의
+symlink가 아닌 target/debug/incremental만 정리합니다. cargo/rustc 실행 중이면
+거부하고 release·운영/자격/롤백 데이터는 유지하며 여유 공간을 보고합니다.
+수문장·품계의 재생성 가능 캐시 약 6GiB를 정리했습니다. 요청대로 큰 빌드 전후에
+주기적으로 사용량을 확인하며 Docker 전체 prune이나 운영 볼륨 삭제는 하지 않습니다.

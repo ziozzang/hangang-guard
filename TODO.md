@@ -503,3 +503,24 @@ rules. IPv4, IPv6 and mapped-IP regressions prove the distinction. All 29 core
 tests, 11 server adapter tests and strict clippy pass. Actual selector materialization
 is still required; this typed foundation does not claim its implementation or
 production enforcement. Production backend remains unchanged.
+
+## User-designated remote k3s qualification and disk maintenance
+
+Source smoke now supports an explicit kubectl wrapper and direct HTTPS API origin,
+in addition to the owned local container default. It obtains the namespace CA
+from kube-root-ca.crt and issues a namespace list-only ServiceAccount token; no
+manager kubeconfig/token is emitted. The user-designated remote k3s v1.37.1+k3s1
+passes 129-policy pagination, deletion/UID recreation/deletion-in-progress refusal,
+invalid-token/RBAC boundaries and a local follower's failure/recovery/admin checks.
+The temporary namespace is removed; node/DNS/existing HTTP and service health
+checks pass. This tests remote source integration, not deploying all components
+into Pods or packet/CNI enforcement. Remote operational records are kept with its
+management workspace; public examples contain no actual host inventory.
+
+`tools/clean_build_cache.py` defaults to inspection and requires --apply to remove
+only explicit Cargo repositories' non-symlinked target/debug/incremental caches.
+It refuses cleanup while cargo/rustc is active, retains release binaries and all
+runtime/state/credential/rollback data, and reports free space. About 6 GiB of
+reproducible Sumunjang/Pumgye incremental caches were removed. Check disk usage
+before/after substantial builds periodically as requested; do not globally prune
+Docker or operational volumes.
