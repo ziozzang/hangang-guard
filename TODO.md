@@ -249,3 +249,12 @@ credential values are absent from stdout/stderr. All pass. The initial fixture
 omitted HTTP Content-Length and caused the valid body to be refused; framing was
 corrected before qualification. Wrong-CA/rotation and live publication/recovery
 remain separate gates. No production policy or binary changes.
+
+## Complete source pagination qualification
+
+The owned TLS source test now includes a successful two-page collection with
+stable opaque resourceVersion, distinct UIDs and a continuation token containing
+`+`, `/`, `%` and `=`. The peer checks decoded token equality; the real observer
+reports exactly two compiled policies after exactly two requests. All 14 source
+cases pass, including previously qualified uncertainty refusal. This verifies
+complete page assembly and URL encoding, not source publication/watch continuity.

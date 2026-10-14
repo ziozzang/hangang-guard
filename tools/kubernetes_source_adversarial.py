@@ -27,6 +27,12 @@ def main():
                 policy={'metadata':{'namespace':'owned','uid':'uid-one'},'spec':{'podSelector':{},'policyTypes':['Ingress']}}
                 body={'kind':'NetworkPolicyList','apiVersion':'networking.k8s.io/v1','metadata':{'resourceVersion':'opaque-rv','continue':''},'items':[]}
                 status=200
+                if mode=='valid-paginated':
+                    if page and page!='opaque+/%=token':
+                        self.send_response(400);self.end_headers();return
+                    policy['metadata']['uid']='uid-two' if page else 'uid-one'
+                    body['items']=[policy]
+                    body['metadata']['continue']='' if page else 'opaque+/%=token'
                 if mode=='wrong-kind':body['kind']='List'
                 if mode=='missing-revision':del body['metadata']['resourceVersion']
                 if mode=='revision-change':
@@ -51,19 +57,22 @@ def main():
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             config=root/'source.json';config.write_text(json.dumps({'api':'https://127.0.0.1:'+str(server.server_port),'namespace':'owned','ca':str(root/'ca.pem'),'token_env':'OWNED_SUM_SOURCE_TOKEN'}))
-            cases=['valid','wrong-kind','missing-revision','revision-change','cycle','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
+            cases=['valid','valid-paginated','wrong-kind','missing-revision','revision-change','cycle','duplicate-uid','wrong-namespace','missing-uid','contradictory-kind','unsupported-policy','slow','redirect','oversize']
             for case in cases:
                 mode=case;requests.clear();started=time.monotonic()
                 result=subprocess.run([binary,'--observe-kubernetes-policy',str(config)],env=dict(os.environ,OWNED_SUM_SOURCE_TOKEN=token),text=True,capture_output=True,timeout=5)
                 elapsed=time.monotonic()-started
                 if token in result.stdout+result.stderr:raise RuntimeError('source credential exposed')
-                if case=='valid':
+                if case in ['valid','valid-paginated']:
                     if result.returncode or json.loads(result.stdout).get('activated') is not False:
                         Path('/tmp/owned-sum-source-tls-failure.log').write_text(result.stderr.replace(token,'[REDACTED]'))
                         raise RuntimeError('valid owned source refused; private sanitized diagnostic retained')
+                    if case=='valid-paginated':
+                        if json.loads(result.stdout).get('policies')!=2 or len(requests)!=2:
+                            raise RuntimeError('complete pagination or opaque continuation encoding failed')
                 elif result.returncode==0:raise RuntimeError('malformed source accepted: '+case)
                 if case=='slow' and elapsed>1.2:raise RuntimeError('source deadline exceeded')
                 if case=='redirect' and len(requests)!=1:raise RuntimeError('source redirect followed')
-            print('PASS: 13 owned TLS source cases; bounded deadlines, no redirect or credential exposure; no activation')
+            print('PASS: 14 owned TLS source cases including complete opaque-token pagination; bounded deadlines, no redirect or credential exposure; no activation')
         finally:server.shutdown();server.server_close();thread.join(timeout=2)
 if __name__=='__main__':main()
