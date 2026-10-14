@@ -100,3 +100,15 @@ mapped 주소 정규화, strict subnet 검증과 peer별 CIDR 차집합을 지�
 예외는 해당 peer에만 적용되며 다른 peer/정책이 같은 주소를 허용할 수 있습니다.
 서버 NetworkPolicy 집행은 아직 활성화되지 않았습니다. 목적지·포트·방향·선택자
 문맥, API 원천 권위, 스냅샷 신선도 및 CNI 검증이 추가로 필요합니다.
+
+## 선택된 방향별 네트워크 코어
+
+`SelectedDirection`은 선택자가 해석된 대상·방향에 TCP/UDP/SCTP 목적지 포트와
+범위를 적용합니다. 선택된 정책 없음과 격리된 기본 거부를 구분하며, 규칙 간에는
+허용을 합치고 각 규칙 안에서는 peer와 포트 조건을 함께 요구합니다. 빈 peer/포트는
+제한 없음입니다. 격리된 대상의 목적지 포트 0은 거부합니다. 규칙·peer·포트 전체
+개수를 제한합니다. 원천 어댑터가 선택자와 named port를 해석하고 ingress/egress를
+독립적으로 조정해야 합니다. 규칙 후보는 아직 제한된 순차 조회이므로 대규모 정책의
+성능을 주장하려면 인덱스와 측정이 필요합니다. 서버·프로토콜·CNI 활성화는 아닙니다.
+
+의미 참조: [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/).

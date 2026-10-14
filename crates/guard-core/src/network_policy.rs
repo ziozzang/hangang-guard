@@ -44,9 +44,174 @@ impl IpBlock {
     }
 }
 
+/// Transport protocol from trusted connection context, not an HTTP header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Tcp,
+    Udp,
+    Sctp,
+}
+
+#[derive(Clone)]
+pub struct PortRange {
+    protocol: Transport,
+    first: u16,
+    last: u16,
+}
+impl PortRange {
+    pub fn new(protocol: Transport, first: u16, last: u16) -> Result<Self> {
+        ensure!(first > 0 && first <= last, "invalid destination port range");
+        Ok(Self {
+            protocol,
+            first,
+            last,
+        })
+    }
+}
+
+/// Empty peers or ports mean all peers or all ports, respectively.
+#[derive(Clone)]
+pub struct NetworkRule {
+    peers: Vec<IpBlock>,
+    ports: Vec<PortRange>,
+}
+impl NetworkRule {
+    pub fn new(peers: Vec<IpBlock>, ports: Vec<PortRange>) -> Result<Self> {
+        ensure!(
+            peers.len() <= 4096 && ports.len() <= 4096,
+            "network rule exceeds bound"
+        );
+        Ok(Self { peers, ports })
+    }
+    fn permits(&self, peer: IpAddr, protocol: Transport, port: u16) -> bool {
+        (self.peers.is_empty() || self.peers.iter().any(|p| p.contains(peer)))
+            && (self.ports.is_empty()
+                || self
+                    .ports
+                    .iter()
+                    .any(|p| p.protocol == protocol && (p.first..=p.last).contains(&port)))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum NetworkDecision {
+    NotIsolated,
+    Allowed,
+    Denied,
+}
+
+/// One target and one direction, after authoritative selector resolution.
+/// Ingress and egress must be resolved independently. Named ports must be
+/// resolved by the source adapter; this core accepts only numeric ports.
+#[derive(Clone)]
+pub struct SelectedDirection {
+    isolated: bool,
+    rules: Vec<NetworkRule>,
+}
+impl SelectedDirection {
+    pub fn compile(isolated: bool, rules: Vec<NetworkRule>) -> Result<Self> {
+        ensure!(rules.len() <= 4096, "too many network rules");
+        ensure!(
+            isolated || rules.is_empty(),
+            "rules without selected policy"
+        );
+        let mut total = 0usize;
+        for rule in &rules {
+            total = total
+                .checked_add(rule.peers.len() + rule.ports.len() + 1)
+                .ok_or_else(|| anyhow::anyhow!("network policy capacity overflow"))?;
+        }
+        ensure!(total <= 16384, "network policy exceeds total capacity");
+        Ok(Self { isolated, rules })
+    }
+    pub fn decide(&self, peer: IpAddr, protocol: Transport, port: u16) -> NetworkDecision {
+        if !self.isolated {
+            return NetworkDecision::NotIsolated;
+        }
+        if port != 0 && self.rules.iter().any(|r| r.permits(peer, protocol, port)) {
+            NetworkDecision::Allowed
+        } else {
+            NetworkDecision::Denied
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_direction_distinguishes_default_deny_and_additive_allow() {
+        let ip = "192.0.2.70".parse().unwrap();
+        assert_eq!(
+            SelectedDirection::compile(false, vec![])
+                .unwrap()
+                .decide(ip, Transport::Tcp, 443),
+            NetworkDecision::NotIsolated
+        );
+        assert_eq!(
+            SelectedDirection::compile(true, vec![])
+                .unwrap()
+                .decide(ip, Transport::Tcp, 443),
+            NetworkDecision::Denied
+        );
+        let a = NetworkRule::new(
+            vec![IpBlock::compile("192.0.2.0/24", &["192.0.2.64/26".into()]).unwrap()],
+            vec![],
+        )
+        .unwrap();
+        let b = NetworkRule::new(
+            vec![IpBlock::compile("192.0.2.64/26", &[]).unwrap()],
+            vec![PortRange::new(Transport::Tcp, 443, 444).unwrap()],
+        )
+        .unwrap();
+        let view = SelectedDirection::compile(true, vec![a, b]).unwrap();
+        assert_eq!(
+            view.decide(ip, Transport::Tcp, 443),
+            NetworkDecision::Allowed
+        );
+        assert_eq!(
+            view.decide(ip, Transport::Tcp, 444),
+            NetworkDecision::Allowed
+        );
+        assert_eq!(
+            view.decide(ip, Transport::Tcp, 445),
+            NetworkDecision::Denied
+        );
+        assert_eq!(
+            view.decide(ip, Transport::Udp, 443),
+            NetworkDecision::Denied
+        );
+        assert_eq!(
+            view.decide("192.0.2.1".parse().unwrap(), Transport::Udp, 53),
+            NetworkDecision::Allowed
+        );
+    }
+
+    #[test]
+    fn wildcard_rule_and_bounds_are_explicit() {
+        let ip = "2001:db8::1".parse().unwrap();
+        let view =
+            SelectedDirection::compile(true, vec![NetworkRule::new(vec![], vec![]).unwrap()])
+                .unwrap();
+        assert_eq!(
+            view.decide(ip, Transport::Sctp, 9000),
+            NetworkDecision::Allowed
+        );
+        assert_eq!(view.decide(ip, Transport::Tcp, 0), NetworkDecision::Denied);
+        assert!(PortRange::new(Transport::Tcp, 0, 80).is_err());
+        assert!(PortRange::new(Transport::Tcp, 90, 80).is_err());
+        assert!(
+            SelectedDirection::compile(false, vec![NetworkRule::new(vec![], vec![]).unwrap()])
+                .is_err()
+        );
+        let rule = NetworkRule::new(
+            vec![],
+            vec![PortRange::new(Transport::Tcp, 1, 65535).unwrap(); 4096],
+        )
+        .unwrap();
+        assert!(SelectedDirection::compile(true, vec![rule; 4]).is_err());
+    }
 
     #[test]
     fn exceptions_are_local_to_one_additive_peer() {

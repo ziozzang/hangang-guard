@@ -92,3 +92,17 @@ CIDR subtraction. Exceptions apply to their own peer, not a global deny list;
 other peers/policies can still allow that address. This is not activated server
 NetworkPolicy enforcement. Destination/port/direction and selector context, API
 source ownership, snapshot freshness and CNI qualification remain required.
+
+## Selected network direction core
+
+`SelectedDirection` now evaluates a selector-resolved target/direction with TCP,
+UDP or SCTP destination ports and ranges. It distinguishes no selected policy
+from isolated default deny; matching rules are additive, with peer and port
+conditions intersected within each rule. Empty peers/ports are unrestricted.
+Zero destination port is refused for isolated targets. Capacity is bounded across
+rules, peers and ports. The source adapter must resolve selectors and named ports,
+and independently reconcile ingress/egress. Rule-level matching still scans
+bounded candidates and needs a measured index before large-policy performance
+claims. No server, native protocol or CNI activation is implied.
+
+Semantics reference: [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
