@@ -5,8 +5,8 @@
   "api_version": 1,
   "entry": "index.js",
   "assets": {
-    "index.js": "c0278e0560c5019ef82f46b7800c8b4a6b2c0fce3de1debdf92ee4ef33771bf5",
-    "panel.html": "298d82e9f92aa548b6b19a1a2eb03d0f4b1399e419ad62063a4f1b4ac7e117ea",
+    "index.js": "18893cbcea8fae3adfb015e2b6aced616a73e9f56c6d77c91994c5e38984f2f2",
+    "panel.html": "efb797dd3b2f5e09e13ec2f2e7c1c69887af18d7d37edc2c7770ce3e79f7ab8f",
     "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
   },
   "routes": [
