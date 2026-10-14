@@ -132,3 +132,9 @@ mTLS/ALPN·판정 의미는 유지합니다. 연결 태스크는 리스너와 �
 리비전의 교체도 unavailable·TTL 0을 반환합니다. debug/정적 전송·실제 품계 관측
 검사가 통과했으며 새 버전 정적 자산도 서명 게시 전에 검증합니다. 분산 lease는
 아니며 Actions는 비활성입니다.
+
+[v0.3.5](https://github.com/ziozzang/sumunjang/releases/tag/v0.3.5)를
+`cd9d8413cf6e71d82a386484a8aa82ee21405f92`에서 게시했습니다. 정확한 새 버전 정적 세 권위 endpoint·소스 회귀/
+Clippy·릴리스 경계 검사를 통과했습니다. 재다운로드 자산은 원본과 일치하고 고정
+서명·버전/대상/URL 바인딩·정적 ELF를 독립 검증했습니다. 내부 적용과 K8s 통합
+endpoint 검증은 다음 단계로 남아 있습니다.

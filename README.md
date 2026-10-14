@@ -146,3 +146,10 @@ numeric policy revisions. Debug/static transport and actual Pumgye observation
 fixtures passed. Newly versioned static assets require qualification before
 signed publication. These replies remain observations, not distributed leases.
 GitHub Actions remains disabled.
+
+[v0.3.5](https://github.com/ziozzang/sumunjang/releases/tag/v0.3.5) is now
+published at `cd9d8413cf6e71d82a386484a8aa82ee21405f92`. Exact newly versioned static three-authority endpoint
+qualification, source regression/Clippy and release boundary checks passed.
+All downloaded assets matched originals; pinned signatures, version/target/URL
+bindings and static ELF were independently verified. Internal adoption and
+Kubernetes combined-endpoint qualification remain subsequent gates.
