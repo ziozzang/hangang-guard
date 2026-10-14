@@ -236,3 +236,16 @@ collection/compilation, invalid-token refusal and cross-namespace RBAC refusal p
 cleanup deletes only its fixture namespace. Strict server clippy passes. Malicious
 pagination/TLS/timeouts, source publication, watch recovery, rotation/pooling and
 contextual enforcement remain open. This observer is not production activation.
+
+## Owned TLS source adversarial qualification
+
+`tools/kubernetes_source_adversarial.py` drives the actual observer executable
+against an owned TLS server with a private synthetic bearer and generated CA.
+Thirteen cases qualify valid empty collection and refusal of wrong collection
+kind, missing/changing revision, continuation cycles, duplicate/missing UID,
+wrong namespace, contradictory item kind, unresolved policy, slow response,
+redirect and >1 MiB body. Deadline refusal is bounded; redirects are not followed;
+credential values are absent from stdout/stderr. All pass. The initial fixture
+omitted HTTP Content-Length and caused the valid body to be refused; framing was
+corrected before qualification. Wrong-CA/rotation and live publication/recovery
+remain separate gates. No production policy or binary changes.

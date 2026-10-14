@@ -229,3 +229,14 @@ Clippy와 실제 API 비교 22개가 통과했습니다. 실행 중 게시·신�
 거부가 통과했고 자체 fixture Namespace만 삭제했습니다. 서버 Clippy도 통과했습니다.
 악성 페이지/TLS/timeout·원천 게시·watch 복구·회전/풀링·요청 집행은 남아 있습니다.
 운영 활성화가 아닌 관찰 경로입니다.
+
+## 자체 TLS 원천의 악성 응답 검증
+
+`tools/kubernetes_source_adversarial.py`가 생성 CA·비공개 합성 Bearer를 사용하는
+자체 TLS 서버에 실제 관찰 실행 파일을 연결합니다. 정상 빈 목록과 잘못된 kind,
+revision 누락/변경, continuation 순환, UID 중복/누락, Namespace 불일치,
+항목 kind 모순, 미해석 정책, 지연, 리다이렉트와 1MiB 초과 본문의 13개 사례가
+통과했습니다. 시간 제한과 리다이렉트 미추종을 확인했고 stdout/stderr에 자격값이
+없습니다. 초기 fixture의 Content-Length 누락으로 정상 본문이 거부되어 HTTP
+프레이밍을 수정한 후 검증했습니다. 잘못된 CA/회전과 실행 중 게시/복구는 별도
+검증 대상입니다. 운영 정책·바이너리는 변경하지 않았습니다.
