@@ -466,3 +466,16 @@ and proves the actual observer refuses collection. It removes the finalizer and
 cleans its namespace. Nineteen TLS cases (including deleting policy), persistent
 pool/credential recovery, actual pagination/lifecycle/follower smoke and strict
 clippy pass. Production remains at its previously qualified deployment.
+
+## Pooled source diagnostics internally deployed — 2026-10-14
+
+Optimized Sumunjang `ae1cde6` and digest-pinned plugin v0.1.3 are now deployed
+internally. Before rollout the release passes 19 owned TLS cases including pool
+reuse, CA/material replacement and credential failure/recovery; actual Kubernetes
+129-policy pagination/deletion/recreation/deletion-in-progress/follower/RBAC
+qualification; and Chromium mock-context UI qualification. Previous binary,
+stopped SQLite and registry backups are retained. Live API permissions, native
+mTLS HGD1, Pumgye/Hopae menus, matrix, SSO/logout and actual Hangang Kubernetes
+diagnostic proxy pass. The browser visibly shows disabled for unconfigured source,
+rather than stale normal status. Production source remains unconfigured; diagnostics
+are not gateway/CNI enforcement. Public release tags and Actions are unchanged.
