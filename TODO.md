@@ -83,3 +83,12 @@ prompts and use LLM queries for analysis. Decide implementation after design.
 - [x] Trusted pinned Guard menu package, host authentication and native theme.
 - [x] Reproducible generation and host credential/role/audit bounds.
 - [ ] Coordinate verified package activation with runtime auto-updates; host pins remain explicit.
+
+## Kubernetes ipBlock primitive
+
+Implemented core-only `network_policy::IpBlock`: bounded exception input,
+canonical IPv4/IPv6 and mapped addresses, strict subnet validation and per-peer
+CIDR subtraction. Exceptions apply to their own peer, not a global deny list;
+other peers/policies can still allow that address. This is not activated server
+NetworkPolicy enforcement. Destination/port/direction and selector context, API
+source ownership, snapshot freshness and CNI qualification remain required.

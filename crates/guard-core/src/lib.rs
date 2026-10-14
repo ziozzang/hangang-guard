@@ -1,6 +1,7 @@
 pub mod rules;
 use rules::CompiledRules;
 pub use rules::{GeoContext, Rule, RuleAction, RuleSet, Suspicion};
+pub mod network_policy;
 pub mod prefix;
 use anyhow::{Result, ensure};
 use ipnet::IpNet;

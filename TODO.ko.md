@@ -92,3 +92,11 @@ hangang-flogging 같은거라고 할까?
 - [x] 해시 고정 Guard 메뉴 패키지·host 인증·native 테마.
 - [x] 재현 가능한 생성과 host credential/역할/감사 제한.
 - [ ] 검증된 패키지 활성화와 런타임 자동 업데이트 조율; host pin은 명시적으로 유지.
+
+## Kubernetes ipBlock 코어
+
+코어에 `network_policy::IpBlock`을 구현했습니다. 예외 개수 제한, IPv4/IPv6 및
+mapped 주소 정규화, strict subnet 검증과 peer별 CIDR 차집합을 지원합니다.
+예외는 해당 peer에만 적용되며 다른 peer/정책이 같은 주소를 허용할 수 있습니다.
+서버 NetworkPolicy 집행은 아직 활성화되지 않았습니다. 목적지·포트·방향·선택자
+문맥, API 원천 권위, 스냅샷 신선도 및 CNI 검증이 추가로 필요합니다.
