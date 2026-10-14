@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/guard-core", "crates/guard-server", "crates/guard-load", "crates/guard-update"]
+members = ["crates/guard-core", "crates/guard-server", "crates/guard-load", "crates/guard-update", "crates/guard-grpc"]
 resolver = "2"
 
 [workspace.package]

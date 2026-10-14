@@ -48,7 +48,7 @@ pub(crate) fn tls_acceptor(
     config.max_early_data_size = 0;
     Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
 }
-fn matches_token(supplied: &[u8], expected: &[u8]) -> bool {
+pub(crate) fn matches_token(supplied: &[u8], expected: &[u8]) -> bool {
     supplied.len() == expected.len()
         && supplied
             .iter()

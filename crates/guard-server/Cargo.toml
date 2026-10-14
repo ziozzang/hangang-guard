@@ -16,6 +16,10 @@ name = "hangang-guard"
 path = "src/main.rs"
 
 [dependencies]
+hangang-runtime = { git = "https://github.com/ziozzang/hangang-runtime", rev = "81352ef35a2a0c522e02b2f14ac4770b59a17d40" }
+guard-grpc = { path = "../guard-grpc" }
+tonic = { version = "0.14.6", features = ["tls-ring"] }
+tokio-stream = { version = "0.1", features = ["net"] }
 arc-swap = "1"
 maxminddb = { version = "0.32", default-features = false }
 mlua = { version = "0.11", features = ["lua54", "vendored", "send", "serialize"] }

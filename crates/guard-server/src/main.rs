@@ -1,4 +1,5 @@
 mod geoip;
+mod grpc;
 mod kubernetes;
 mod lua_rules;
 mod protocol;
@@ -80,6 +81,9 @@ struct Args {
     /// Optional persistent binary decision endpoint; remote listeners require mTLS.
     #[arg(long)]
     decision_listen: Option<std::net::SocketAddr>,
+    /// Additional gRPC network decisions; mTLS required.
+    #[arg(long, requires_all = ["decision_tls_cert", "decision_listen"])]
+    grpc_listen: Option<std::net::SocketAddr>,
     #[arg(long, requires_all = ["decision_tls_key", "decision_client_ca", "decision_listen"])]
     decision_tls_cert: Option<PathBuf>,
     #[arg(long, requires = "decision_tls_cert")]
@@ -881,6 +885,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                     anyhow::anyhow!("supervised listener must be a literal IP:port")
                 })?,
                 decision: args.decision_listen,
+                grpc: args.grpc_listen,
                 database: args.database.clone(),
                 worker_arguments: worker_arguments(),
                 update,
@@ -987,6 +992,33 @@ async fn run(args: Args) -> anyhow::Result<()> {
     } else {
         None
     };
+    let grpc_worker = if let Some(address) = args.grpc_listen {
+        let tls = grpc::configuration(
+            args.decision_tls_cert.as_ref().unwrap(),
+            args.decision_tls_key.as_ref().unwrap(),
+            args.decision_client_ca.as_ref().unwrap(),
+        )?;
+        let listener = if args.serve_child {
+            #[cfg(target_os = "linux")]
+            {
+                supervisor::inherited_listener("HANGANG_GUARD_GRPC_FD", address)?
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                anyhow::bail!("supervised workers require Linux");
+            }
+        } else {
+            tokio::net::TcpListener::bind(address).await?
+        };
+        Some(tokio::spawn(grpc::serve(
+            listener,
+            tls,
+            app.clone(),
+            stop_rx.clone(),
+        )))
+    } else {
+        None
+    };
     let checkpoint_app = app.clone();
     let worker = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -1026,6 +1058,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let _ = stop_tx.send(true);
     let _ = worker.await;
     if let Some(worker) = binary_worker {
+        worker.await??;
+    }
+    if let Some(worker) = grpc_worker {
         worker.await??;
     }
     checkpoint(app).await?;

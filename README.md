@@ -129,3 +129,5 @@ and [design](docs/DESIGN.md) for the delivery procedure.
 [Update trust model and lifecycle](docs/UPDATES.md)
 
 Use [Guard in the native Hangang console](docs/CONSOLE.md) with delegated host authentication and a pinned package.
+
+Additional [gRPC decisions](docs/GRPC.md) reuse the shared server runtime; building requires `protoc`.
