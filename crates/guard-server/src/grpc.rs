@@ -17,24 +17,37 @@ struct Service {
     app: App,
     requests: Arc<Semaphore>,
 }
+fn caller(app: &App, metadata: &tonic::metadata::MetadataMap) -> Result<(), Status> {
+    let mut values = metadata.get_all("authorization").iter();
+    let supplied = values
+        .next()
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if values.next().is_some()
+        || !supplied.is_some_and(|value| {
+            crate::protocol::matches_token(value.as_bytes(), app.collector.as_bytes())
+        })
+    {
+        return Err(Status::unauthenticated("collector credential required"));
+    }
+    Ok(())
+}
+fn authenticate_transport<S>(
+    service: S,
+    app: App,
+) -> tonic::service::interceptor::InterceptedService<S, impl tonic::service::Interceptor + Clone> {
+    tonic::service::interceptor::InterceptedService::new(service, move |request: Request<()>| {
+        caller(&app, request.metadata())?;
+        Ok(request)
+    })
+}
 #[tonic::async_trait]
 impl Network for Service {
     async fn check(
         &self,
         request: Request<NetworkRequest>,
     ) -> Result<Response<NetworkReply>, Status> {
-        let mut values = request.metadata().get_all("authorization").iter();
-        let supplied = values
-            .next()
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-        if values.next().is_some()
-            || !supplied.is_some_and(|value| {
-                crate::protocol::matches_token(value.as_bytes(), self.app.collector.as_bytes())
-            })
-        {
-            return Err(Status::unauthenticated("collector credential required"));
-        }
+        caller(&self.app, request.metadata())?;
         let _permit = self
             .requests
             .clone()
@@ -110,14 +123,15 @@ pub async fn serve(
 ) -> Result<()> {
     let incoming = hangang_runtime::incoming(listener);
     hangang_runtime::server(tls)?
-        .add_service(
+        .add_service(authenticate_transport(
             NetworkServer::new(Service {
                 requests: Arc::new(Semaphore::new(app.max_http_requests)),
-                app,
+                app: app.clone(),
             })
             .max_decoding_message_size(2048)
             .max_encoding_message_size(1024),
-        )
+            app,
+        ))
         .serve_with_incoming_shutdown(incoming, async move {
             if !*stop.borrow() {
                 let _ = stop.changed().await;
@@ -211,5 +225,248 @@ mod tests {
         input.get_mut().minimum_revision = u64::MAX;
         let result = service.check(input).await.unwrap().into_inner();
         assert_eq!((result.verdict, result.mode, result.ttl_ms), (3, 0, 0));
+    }
+
+    use axum::{
+        body::{Body, Bytes},
+        http,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    struct PredecodeStream {
+        polls: Arc<AtomicUsize>,
+        forbid_poll: bool,
+        chunks: std::collections::VecDeque<Bytes>,
+    }
+    impl tonic::codegen::tokio_stream::Stream for PredecodeStream {
+        type Item = Result<Bytes, std::io::Error>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                !self.forbid_poll,
+                "unauthenticated protobuf body was polled"
+            );
+            std::task::Poll::Ready(self.chunks.pop_front().map(Ok))
+        }
+    }
+    fn predecode_body(chunks: Vec<Bytes>, forbid_poll: bool) -> (Body, Arc<AtomicUsize>) {
+        let polls = Arc::new(AtomicUsize::new(0));
+        (
+            Body::from_stream(PredecodeStream {
+                polls: polls.clone(),
+                forbid_poll,
+                chunks: chunks.into(),
+            }),
+            polls,
+        )
+    }
+    fn predecode_frame(payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![0];
+        frame.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+    fn predecode_request(path: &str, credentials: &[&str], body: Body) -> http::Request<Body> {
+        let mut request = http::Request::builder()
+            .method("POST")
+            .version(http::Version::HTTP_2)
+            .uri(path)
+            .header("content-type", "application/grpc")
+            .header("te", "trailers")
+            .body(body)
+            .unwrap();
+        for credential in credentials {
+            request
+                .headers_mut()
+                .append("authorization", credential.parse().unwrap());
+        }
+        request
+    }
+    async fn predecode_response<B>(response: http::Response<B>) -> (u16, Vec<u8>)
+    where
+        B: tonic::codegen::Body<Data = Bytes> + Unpin,
+        B::Error: std::fmt::Debug,
+    {
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let mut status = response
+            .headers()
+            .get("grpc-status")
+            .map(|v| v.to_str().unwrap().parse::<u16>().unwrap());
+        let mut body = response.into_body();
+        let mut data = Vec::new();
+        while let Some(frame) =
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx)).await
+        {
+            match frame.unwrap().into_data() {
+                Ok(bytes) => data.extend_from_slice(&bytes),
+                Err(frame) => {
+                    if let Ok(trailers) = frame.into_trailers()
+                        && let Some(value) = trailers.get("grpc-status")
+                    {
+                        status = Some(value.to_str().unwrap().parse::<u16>().unwrap());
+                    }
+                }
+            }
+        }
+        (status.expect("gRPC status"), data)
+    }
+
+    const PREDECODE_PATH: &str = "/hangang.sumunjang.v1.Network/Check";
+    fn predecode_service(
+        app: App,
+        requests: Arc<Semaphore>,
+    ) -> tower::util::BoxCloneService<
+        http::Request<Body>,
+        http::Response<Body>,
+        std::convert::Infallible,
+    > {
+        let generated = NetworkServer::new(Service {
+            app: app.clone(),
+            requests,
+        })
+        .max_decoding_message_size(2048)
+        .max_encoding_message_size(1024);
+        tower::util::BoxCloneService::new(tower::ServiceExt::<http::Request<Body>>::map_response(
+            authenticate_transport(generated, app),
+            |response| response.map(Body::new),
+        ))
+    }
+    #[tokio::test]
+    async fn predecode_auth_rejects_missing_wrong_role_and_duplicate_headers_before_body() {
+        let app = crate::tests::app();
+        let requests = Arc::new(Semaphore::new(1));
+        for credentials in [
+            vec![],
+            vec!["Bearer incorrect"],
+            vec!["Bearer admin-test-token"],
+            vec!["Bearer collector-test-token", "Bearer incorrect"],
+            vec!["Bearer incorrect", "Bearer collector-test-token"],
+            vec!["Bearer collector-test-token", "Bearer collector-test-token"],
+        ] {
+            let (body, polls) = predecode_body(vec![Bytes::from_static(&[255; 5])], true);
+            let response = predecode_service(app.clone(), requests.clone())
+                .oneshot(predecode_request(PREDECODE_PATH, &credentials, body))
+                .await
+                .unwrap();
+            let (status, data) = predecode_response(response).await;
+            assert_eq!(status, tonic::Code::Unauthenticated as u16);
+            assert!(data.is_empty());
+            assert_eq!(polls.load(Ordering::SeqCst), 0);
+            assert_eq!(requests.available_permits(), 1);
+        }
+    }
+    fn predecode_scalar_payload(fields: &[(u8, u64)]) -> Vec<u8> {
+        let mut output = Vec::new();
+        for &(field, mut value) in fields {
+            if value == 0 {
+                continue;
+            }
+            output.push(field << 3);
+            while value >= 128 {
+                output.push((value as u8 & 0x7f) | 0x80);
+                value >>= 7;
+            }
+            output.push(value as u8);
+        }
+        output
+    }
+    #[tokio::test]
+    async fn predecode_auth_preserves_decoding_and_network_snapshot_execution() {
+        let app = crate::tests::app();
+        let requests = Arc::new(Semaphore::new(1));
+        let expected = Service {
+            app: app.clone(),
+            requests: requests.clone(),
+        }
+        .check(request("collector-test-token"))
+        .await
+        .unwrap()
+        .into_inner();
+        assert_ne!(expected.verdict, 3);
+        // Canonical NetworkRequest protobuf: request_id=7, ip=192.0.2.1,
+        // omitted minimum_revision=0. Split its framing prefix across chunks.
+        let frame = predecode_frame(b"\x08\x07\x12\x04\xc0\x00\x02\x01");
+        let (body, polls) = predecode_body(
+            vec![
+                Bytes::copy_from_slice(&frame[..2]),
+                Bytes::copy_from_slice(&frame[2..5]),
+                Bytes::copy_from_slice(&frame[5..]),
+            ],
+            false,
+        );
+        let response = predecode_service(app, requests.clone())
+            .oneshot(predecode_request(
+                PREDECODE_PATH,
+                &["Bearer collector-test-token"],
+                body,
+            ))
+            .await
+            .unwrap();
+        let (status, data) = predecode_response(response).await;
+        assert_eq!(status, tonic::Code::Ok as u16);
+        let payload = predecode_scalar_payload(&[
+            (1, expected.request_id),
+            (2, expected.revision),
+            (3, expected.verdict as u64),
+            (4, expected.mode as u64),
+            (5, u64::from(expected.ttl_ms)),
+        ]);
+        assert_eq!(data, predecode_frame(&payload));
+        assert!(polls.load(Ordering::SeqCst) >= 3);
+        assert_eq!(requests.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn predecode_auth_preserves_generated_2048_byte_cap() {
+        let app = crate::tests::app();
+        let requests = Arc::new(Semaphore::new(1));
+        let mut prefix = vec![0];
+        prefix.extend_from_slice(&2049_u32.to_be_bytes());
+        let (body, polls) = predecode_body(vec![Bytes::from(prefix)], false);
+        let response = predecode_service(app, requests.clone())
+            .oneshot(predecode_request(
+                PREDECODE_PATH,
+                &["Bearer collector-test-token"],
+                body,
+            ))
+            .await
+            .unwrap();
+        let (status, data) = predecode_response(response).await;
+        assert_eq!(status, tonic::Code::OutOfRange as u16);
+        assert!(data.is_empty());
+        assert!(polls.load(Ordering::SeqCst) > 0);
+        assert_eq!(requests.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn predecode_auth_cannot_be_supplied_only_in_request_trailers() {
+        use http_body_util::BodyExt;
+        let app = crate::tests::app();
+        let requests = Arc::new(Semaphore::new(1));
+        let frame = predecode_frame(b"\x08\x07\x12\x04\xc0\x00\x02\x01");
+        let (body, polls) = predecode_body(vec![Bytes::from(frame)], true);
+        let trailers_polled = Arc::new(AtomicUsize::new(0));
+        let observed = trailers_polled.clone();
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert(
+            "authorization",
+            "Bearer collector-test-token".parse().unwrap(),
+        );
+        let body = Body::new(body.with_trailers(async move {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Some(Ok::<_, axum::Error>(trailers))
+        }));
+        let response = predecode_service(app, requests.clone())
+            .oneshot(predecode_request(PREDECODE_PATH, &[], body))
+            .await
+            .unwrap();
+        let (status, data) = predecode_response(response).await;
+        assert_eq!(status, tonic::Code::Unauthenticated as u16);
+        assert!(data.is_empty());
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(trailers_polled.load(Ordering::SeqCst), 0);
+        assert_eq!(requests.available_permits(), 1);
     }
 }

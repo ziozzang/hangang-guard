@@ -1,5 +1,11 @@
 # gRPC network decisions
 
+Caller authentication also runs before generated protobuf decoding. Bearer
+credentials belong in initial metadata; a credential supplied only in trailers
+is refused without polling the body. Native handler checks and the 2,048-byte
+message cap remain. Cumulative unary-body and aggregate decode budgets are
+separate shared-runtime work, not guarantees of the handler semaphore.
+
 [한국어](ko/GRPC.md)
 
 `--grpc-listen IP:port` adds `hangang.sumunjang.v1.Network/Check` alongside HGD1.

@@ -1,5 +1,10 @@
 # gRPC 네트워크 판정
 
+생성된 protobuf 디코딩 전에 호출자를 먼저 인증한다. Bearer는 최초
+메타데이터에 있어야 하며 trailer에만 있는 자격은 본문을 읽지 않고 거부한다.
+네이티브 핸들러 검사와 2,048바이트 메시지 제한도 유지한다. 누적 unary 본문과
+전체 디코딩 예산은 별도 공용 런타임 작업이며 핸들러 semaphore만의 보장이 아니다.
+
 [English](../GRPC.md)
 
 `--grpc-listen IP:port`로 HGD1과 함께 `hangang.sumunjang.v1.Network/Check`를 제공한다.
