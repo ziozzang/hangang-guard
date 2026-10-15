@@ -8,3 +8,4 @@ license.workspace = true
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 ipnet = "2"
+getrandom = "0.2"

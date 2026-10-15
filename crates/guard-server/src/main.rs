@@ -393,6 +393,33 @@ async fn policy_put(HttpState(app): HttpState<App>, Json(policy): Json<Policy>) 
     })
     .await
 }
+// Body-bound CAS survives console mediation that does not forward ETag headers.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyReplacement {
+    expected_revision: String,
+    policy: Policy,
+}
+fn policy_document(e: &Engine) -> Value {
+    json!({"revision": e.policy_revision(), "policy": e.policy()})
+}
+async fn policy_document_get(HttpState(app): HttpState<App>) -> ApiResult {
+    operation(app, false, |e| Ok(policy_document(e))).await
+}
+async fn policy_document_put(
+    HttpState(app): HttpState<App>,
+    Json(input): Json<PolicyReplacement>,
+) -> ApiResult {
+    operation(app, true, move |e| {
+        anyhow::ensure!(e.policy_revision() == input.expected_revision, "policy revision conflict; draft preserved. Reload policy and reconcile before saving. / 정책 충돌: 초안은 유지됩니다. 저장된 정책을 다시 불러와 변경을 조정하세요.");
+        e.set_policy(input.policy)?;
+        Ok(policy_document(e))
+    }).await.map_err(|(code, body)| {
+        if body.0["error"].as_str().is_some_and(|s| s.starts_with("policy revision conflict;")) {
+            (StatusCode::CONFLICT, body)
+        } else { (code, body) }
+    })
+}
 async fn blocks(HttpState(app): HttpState<App>) -> ApiResult {
     operation(app, false, |e| {
         Ok(serde_json::to_value(e.snapshot(now()).blocks)?)
@@ -567,6 +594,10 @@ fn router(app: App) -> Router {
         .route("/v1/rules/validate", post(rules_validate))
         .route("/v1/candidates", get(candidates))
         .route("/v1/policy", get(policy_get).put(policy_put))
+        .route(
+            "/v1/policy/document",
+            get(policy_document_get).put(policy_document_put),
+        )
         .route(
             "/v1/blocks",
             get(blocks).post(block_add).delete(block_delete),
@@ -1261,6 +1292,168 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn policy_document_parallel_publish_has_one_winner() {
+        let a = app();
+        let (_, document) = request(
+            a.clone(),
+            "/v1/policy/document",
+            "GET",
+            "admin-test-token",
+            json!({}),
+        )
+        .await;
+        let input =
+            json!({"expected_revision": document["revision"], "policy": document["policy"]});
+        let (one, two) = tokio::join!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "PUT",
+                "admin-test-token",
+                input.clone()
+            ),
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "PUT",
+                "admin-test-token",
+                input
+            )
+        );
+        assert!(
+            (one.0 == StatusCode::OK && two.0 == StatusCode::CONFLICT)
+                || (two.0 == StatusCode::OK && one.0 == StatusCode::CONFLICT)
+        );
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "GET",
+                "collector-test-token",
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(
+                a,
+                "/v1/policy/document",
+                "PUT",
+                "collector-test-token",
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    #[tokio::test]
+    async fn policy_document_two_client_race_and_legacy_compatibility() {
+        let a = app();
+        let get = |a| {
+            request(
+                a,
+                "/v1/policy/document",
+                "GET",
+                "admin-test-token",
+                json!({}),
+            )
+        };
+        // Both clients have read before either is allowed to publish. No sleeps.
+        let (_, first) = get(a.clone()).await;
+        let (_, second) = get(a.clone()).await;
+        assert_eq!(first, second);
+        let mut winner = second["policy"].clone();
+        winner["mode"] = json!("enforce");
+        winner["threshold"] = json!(77);
+        let (status, published) = request(
+            a.clone(),
+            "/v1/policy/document",
+            "PUT",
+            "admin-test-token",
+            json!({"expected_revision":second["revision"],"policy":winner}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Allow-save from an older GET cannot replace security settings.
+        let mut stale = first["policy"].clone();
+        stale["allow"] = json!(["203.0.113.1/32"]);
+        let before = serde_json::to_value(a.inner.lock().unwrap().engine.state()).unwrap();
+        let response = request(
+            a.clone(),
+            "/v1/policy/document",
+            "PUT",
+            "admin-test-token",
+            json!({"expected_revision":first["revision"],"policy":stale}),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::CONFLICT);
+        assert_eq!(get(a.clone()).await.1, published);
+        assert_eq!(
+            serde_json::to_value(a.inner.lock().unwrap().engine.state()).unwrap(),
+            before
+        );
+        // Explicit reconciliation keeps current settings and publishes a valid draft.
+        let mut reconciled = published["policy"].clone();
+        reconciled["allow"] = stale["allow"].clone();
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "PUT",
+                "admin-test-token",
+                json!({"expected_revision":published["revision"],"policy":reconciled})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let current = get(a.clone()).await.1;
+        // Native wire remains compatible; every successful legacy writer invalidates drafts.
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy",
+                "GET",
+                "admin-test-token",
+                json!({})
+            )
+            .await
+            .1,
+            current["policy"]
+        );
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy",
+                "PUT",
+                "admin-test-token",
+                current["policy"].clone()
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_ne!(get(a.clone()).await.1["revision"], current["revision"]);
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "PUT",
+                "admin-test-token",
+                json!({"expected_revision":current["revision"],"policy":current["policy"]})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        let inner = a.inner.lock().unwrap();
+        let restored = Engine::restore(inner.engine.state()).unwrap();
+        assert_ne!(restored.policy_revision(), inner.engine.policy_revision());
+    }
+    #[tokio::test]
     async fn policy_checkpoint_and_failure_rollback() {
         let a = app();
         let p = json!({"mode":"enforce","auto_block":false});
@@ -1279,6 +1472,41 @@ mod tests {
             assert_eq!(restored.policy().mode, guard_core::Mode::Enforce);
             db.execute_batch("DROP TABLE checkpoint").unwrap();
         }
+        let document = request(
+            a.clone(),
+            "/v1/policy/document",
+            "GET",
+            "admin-test-token",
+            json!({}),
+        )
+        .await
+        .1;
+        let mut replacement = document["policy"].clone();
+        replacement["mode"] = json!("observe");
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "PUT",
+                "admin-test-token",
+                json!({"expected_revision":document["revision"],"policy":replacement})
+            )
+            .await
+            .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            request(
+                a.clone(),
+                "/v1/policy/document",
+                "GET",
+                "admin-test-token",
+                json!({})
+            )
+            .await
+            .1,
+            document
+        );
         assert_eq!(
             request(
                 a.clone(),

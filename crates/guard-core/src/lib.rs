@@ -197,6 +197,9 @@ pub struct AsnPrefix {
 #[derive(Clone)]
 pub struct Engine {
     policy: Policy,
+    // Deliberately absent from checkpoints: restored processes reject old drafts.
+    policy_epoch: String,
+    policy_sequence: u64,
     revision: u64,
     blocks: BTreeMap<String, Arc<Block>>,
     aggregates: BTreeMap<String, Aggregate>,
@@ -221,7 +224,12 @@ impl Engine {
             allow_index.insert(canonical_network(n)?, ());
         }
         let snapshot_bytes = snapshot_budget(&policy, std::iter::empty());
+        let mut epoch = [0u8; 32];
+        getrandom::getrandom(&mut epoch)
+            .map_err(|e| anyhow::anyhow!("policy epoch unavailable: {e}"))?;
         Ok(Self {
+            policy_epoch: epoch.iter().map(|b| format!("{b:02x}")).collect(),
+            policy_sequence: 1,
             policy,
             revision: 1,
             blocks: BTreeMap::new(),
@@ -239,6 +247,9 @@ impl Engine {
     pub fn policy(&self) -> &Policy {
         &self.policy
     }
+    pub fn policy_revision(&self) -> String {
+        format!("{}:{}", self.policy_epoch, self.policy_sequence)
+    }
     pub fn stats(&self) -> Stats {
         self.stats.clone()
     }
@@ -252,7 +263,12 @@ impl Engine {
             snapshot_budget(&policy, self.blocks.values().map(AsRef::as_ref)) <= 4_000_000,
             "snapshot byte budget exceeded"
         );
+        let sequence = self
+            .policy_sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("policy revision exhausted"))?;
         self.snapshot_bytes = snapshot_budget(&policy, self.blocks.values().map(AsRef::as_ref));
+        self.policy_sequence = sequence;
         self.allow_index = allow_index;
         self.policy = policy;
         self.aggregates.clear();
@@ -626,6 +642,24 @@ mod tests {
                 kind,
             }],
         }
+    }
+    #[test]
+    fn policy_revision_is_independent_and_validated() {
+        let mut e = Engine::new(Policy::default()).unwrap();
+        let initial = e.policy_revision();
+        e.ingest(batch("192.0.2.1", 100, EventKind::Honeypot), 100)
+            .unwrap();
+        assert_eq!(e.policy_revision(), initial);
+        let mut invalid = e.policy().clone();
+        invalid.threshold = 0;
+        assert!(e.set_policy(invalid).is_err());
+        assert_eq!(e.policy_revision(), initial);
+        e.set_policy(e.policy().clone()).unwrap();
+        assert_ne!(e.policy_revision(), initial);
+        assert_ne!(
+            Engine::restore(e.state()).unwrap().policy_revision(),
+            e.policy_revision()
+        );
     }
     #[test]
     fn threshold_window_and_observe() {

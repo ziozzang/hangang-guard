@@ -36,11 +36,16 @@ policy = {'mode': 'observe', 'auto_block': False, 'window_secs': 60, 'threshold'
 candidates = [{'ip': f'10.{n // 65536}.{n // 256 % 256}.{n % 256}', 'score': 10 + n % 7, 'events': 2, 'first_seen': now - 10, 'last_seen': now, 'asn': 64512, 'eligible': n % 2 == 0, 'suspicion': 'suspicious' if n % 2 == 0 else 'watch'} for n in range(10000)]
 blocks = [{'network': f'172.{n // 65536}.{n // 256 % 256}.{n % 256}/32', 'reason': '<img src=x onerror=alert(1)>', 'expires_at': now + 900} for n in range(100000)]
 rules = {'version': 1, 'rules': []}
+policy_revision = 1
+policy_conflict = False
+policy_unknown = False
+hold_policy_response = False
+pending_policy_routes = []
 bad_status = False
 requests = []
 
 def route(r):
-    global policy, blocks, candidates, rules
+    global policy, policy_revision, blocks, candidates, rules
     req = r.request
     path = req.url.split('/v1/')[1]
     body = req.post_data_json if req.post_data else None
@@ -57,10 +62,17 @@ def route(r):
         data = {'enabled': True, 'phase': 'up_to_date', 'current_version': '0.3.0'}
     elif path == 'update/check':
         data = {'queued': True}
-    elif path == 'policy':
+    elif path == 'policy/document':
         if req.method == 'PUT':
-            policy = body
-        data = policy
+            if policy_unknown:
+                r.fulfill(status=503, json={'error': 'backend unavailable'})
+                return
+            if policy_conflict or body['expected_revision'] != str(policy_revision):
+                r.fulfill(status=409, json={'error': 'policy revision conflict; draft preserved. Reload policy and reconcile before saving.'})
+                return
+            policy = body['policy']
+            policy_revision += 1
+        data = {'policy': policy, 'revision': str(policy_revision)}
     elif path == 'lookup':
         data = {'ip': body['ip'], 'geoip': {'country_code': 'KR', 'country_name': '대한민국', 'asn': 64512, 'asn_organization': 'test'}, 'inspection': {'ip': body['ip'], 'score': 17, 'signal_score': 12, 'static_rule_score': 5, 'suspicion': 'suspicious', 'matched_rules': ['test-rule'], 'decision': {'version': 1, 'revision': 2, 'action': 'allow', 'mode': 'observe', 'reason': None, 'ttl_ms': 1000}}}
     elif path == 'networks/inspect':
@@ -108,6 +120,9 @@ def route(r):
     else:
         r.fulfill(status=400, json={'error': 'unexpected request'})
         return
+    if path == 'policy/document' and req.method == 'PUT' and hold_policy_response:
+        pending_policy_routes.append((r, data))
+        return
     r.fulfill(json=data)
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, executable_path=chromium, args=['--no-sandbox'])
@@ -134,6 +149,13 @@ with sync_playwright() as p:
     page.locator('#tab-allow').click()
     page.locator('#allow-network').fill('203.0.113.9/32')
     page.locator('#allow-form button[type=submit]').click()
+    policy_conflict = True
+    page.locator('#allow-save').click()
+    page.locator('#message').filter(has_text='conflict').wait_for()
+    assert '203.0.113.9/32' not in policy['allow']
+    assert '저장하지' in page.locator('#allow-dirty').inner_text()
+    assert '203.0.113.9/32' in page.locator('#allow-rows').inner_text()
+    policy_conflict = False
     page.locator('#allow-save').click()
     page.locator('#message').filter(has_text='허용 목록을 저장').wait_for(timeout=30000)
     assert policy['threshold'] == 10 and '203.0.113.9/32' in policy['allow']
@@ -141,9 +163,48 @@ with sync_playwright() as p:
     assert page.locator('#policy-threshold').input_value() == '77'
     page.locator('#policy-mode').select_option('enforce')
     page.locator('#policy-auto').check()
+    policy_conflict = True
+    page.locator('#policy-form button[type=submit]').click()
+    page.locator('#message').filter(has_text='conflict').wait_for()
+    assert page.locator('#policy-threshold').input_value() == '77'
+    assert page.locator('#policy-auto').is_checked()
+    assert '저장하지' in page.locator('#policy-dirty').inner_text()
+    assert policy['threshold'] == 10
+    policy_conflict = False
     page.locator('#policy-form button[type=submit]').click()
     page.locator('#message').filter(has_text='정책을 저장').wait_for(timeout=30000)
     assert policy['threshold'] == 77 and policy['mode'] == 'enforce' and policy['auto_block']
+    hold_policy_response = True
+    page.locator('#policy-threshold').fill('88')
+    page.locator('#policy-form button[type=submit]').click()
+    page.locator('#policy-threshold:disabled').wait_for()
+    assert pending_policy_routes
+    for selector in ['#policy-threshold','#policy-mode','#policy-auto','#allow-network','#allow-text','#policy-json']:
+        assert page.locator(selector).is_disabled()
+    bad_status = True
+    held_route, held_document = pending_policy_routes.pop()
+    held_route.fulfill(json=held_document)
+    page.locator('#message').filter(has_text='Change accepted; current-state refresh failed').wait_for()
+    assert policy['threshold'] == 88
+    assert not page.locator('#policy-threshold').is_disabled()
+    assert page.locator('#policy-dirty').inner_text() == ''
+    bad_status = False
+    hold_policy_response = False
+    policy_unknown = True
+    page.locator('#policy-threshold').fill('99')
+    page.locator('#policy-form button[type=submit]').click()
+    page.locator('#message').filter(has_text='Outcome unknown').wait_for()
+    assert page.locator('#policy-threshold').input_value() == '99'
+    assert page.locator('#policy-form button[type=submit]').is_disabled()
+    assert page.locator('#allow-save').is_disabled()
+    before_replay = sum(method == 'PUT' for _, method, _ in requests)
+    page.locator('#policy-form').evaluate("form=>form.dispatchEvent(new Event('submit',{cancelable:true}))")
+    assert sum(method == 'PUT' for _, method, _ in requests) == before_replay
+    policy_unknown = False
+    page.locator('#policy-reload').click()
+    page.locator('#message').filter(has_text='저장된 정책을 불러').wait_for()
+    assert page.locator('#policy-threshold').input_value() == '88'
+    assert not page.locator('#policy-form button[type=submit]').is_disabled()
     page.locator('#tab-candidates').click()
     page.locator('#candidates-controls input[type=search]').fill('10.0.0.0')
     page.locator('#candidates-rows button').click()
@@ -237,6 +298,6 @@ with sync_playwright() as p:
     page.locator('#message[data-error=true]').wait_for()
     assert '인증 실패' in page.locator('#message').inner_text()
     assert not errors, errors
-    print(json.dumps({'browser': 'Chromium ' + browser.version, 'candidate_rows': 10000, 'block_rows': 100000, 'max_rendered_rows': 100, 'workflows': ['status polling preserves unsaved form', 'refresh preserves draft', 'allow draft/save preserves unsaved policy', 'policy save', 'candidate approve', 'block add/delete', 'XSS-safe rendering', 'mobile390px', 'memory-only credential', '401 feedback', 'IPGeoIP+risk inspection', 'CIDR evidence inspection', 'RuleSet exact API', 'Lua validation/save', 'validation errors preserve drafts', 'GeoIP status/reload', 'malformed API response preserves draft'], 'page_errors': errors}, ensure_ascii=False))
+    print(json.dumps({'browser': 'Chromium ' + browser.version, 'candidate_rows': 10000, 'block_rows': 100000, 'max_rendered_rows': 100, 'workflows': ['status polling preserves unsaved form', 'refresh preserves draft', 'allow draft/save preserves unsaved policy', 'policy save', 'policy/allow conflict preserves draft without retry', 'pending input freeze', 'accepted save with failed refresh', 'unknown outcome blocks replay until fresh reload', 'candidate approve', 'block add/delete', 'XSS-safe rendering', 'mobile390px', 'memory-only credential', '401 feedback', 'IPGeoIP+risk inspection', 'CIDR evidence inspection', 'RuleSet exact API', 'Lua validation/save', 'validation errors preserve drafts', 'GeoIP status/reload', 'malformed API response preserves draft'], 'page_errors': errors}, ensure_ascii=False))
     browser.close()
 server.shutdown()

@@ -5,7 +5,7 @@
   "api_version": 1,
   "entry": "index.js",
   "assets": {
-    "index.js": "18893cbcea8fae3adfb015e2b6aced616a73e9f56c6d77c91994c5e38984f2f2",
+    "index.js": "2f8c58df4d9edad58007f2419d59d858a110695d112df1940771da2c70b6a0d0",
     "panel.html": "efb797dd3b2f5e09e13ec2f2e7c1c69887af18d7d37edc2c7770ce3e79f7ab8f",
     "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
   },
@@ -26,12 +26,12 @@
       "mutation": false
     },
     {
-      "path": "policy",
+      "path": "policy/document",
       "method": "GET",
       "mutation": false
     },
     {
-      "path": "policy",
+      "path": "policy/document",
       "method": "PUT",
       "mutation": true
     },

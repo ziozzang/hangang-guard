@@ -38,3 +38,29 @@ checks in the host, actual browser navigation/lifecycle and real-process managem
 operations. Refer to Hangang's `docs/CONSOLE_PLUGINS.md` for registry configuration
 and to the zero-trust design repository for ontology/automation plans. Console
 integration does not itself implement pentest orchestration or ontology decisions.
+
+Policy publication uses `GET /v1/policy/document` → `{revision, policy}` and
+`PUT /v1/policy/document` with `{expected_revision, policy}`. The opaque revision
+is carried in JSON so the Hangang broker need not forward conditional headers.
+Comparison, validation, durable checkpoint and publication share the engine write
+lock. A stale revision returns HTTP 409 without changing state; the UI retains
+the draft and requires an explicit reload/reconciliation. Allowlist saves use the
+loaded document revision too, without a fresh GET followed by an unguarded PUT.
+Revisions change on every successful policy replacement, including native legacy
+writes, and across restarts/restores; unrelated observations do not change them.
+
+Legacy `GET/PUT /v1/policy` retain their original bare Policy wire format and
+unconditional write semantics for native clients. Those clients remain exposed
+to lost updates until migrated to the document endpoint. Deploy the backend
+before the regenerated package; review and repin its manifest in the host. The
+new UI fails closed against an older backend rather than falling back to legacy
+writes. This does not change administrator admission or policy source ownership.
+
+During policy/allowlist publication, draft inputs are disabled until the request
+and refresh finish. A valid write acknowledgement updates the known revision
+immediately; a later refresh failure says “Change accepted” and does not turn
+the accepted write into a retryable failure. Network failures, ambiguous server
+errors, and invalid acknowledgements retain drafts and disable both save actions.
+Only an explicit successful fresh policy reload clears that uncertainty; reload
+replaces the draft, so copy any local changes needed for reconciliation first.
+A 409 retains the draft and is never retried automatically.
