@@ -111,3 +111,32 @@ scratch 이미지에서 그 probe가 동작한다는 뜻이 아니다. 공개 �
 새 원천 자체의 검증이며 새 원천을 쓰는 전체 네 서비스/브라우저 인가 체인, watch/CNI,
 장기 token 회전, API failover, suspend 주입을 증명하지 않는다. 별도 0.3.6 source 버전을
 준비하며 서명/릴리스 및 신규 원천 체인 검증은 별도 게이트로 남긴다.
+
+## 최종 0.3.6 scratch 및 네 서비스 검증
+
+내장 dashboard 수정과 matching plugin의 최종 source
+`d6fc1dec893df963c30f483ddf755421a98920b4`로 Kubernetes native 원천 모드와 기존 로컬
+DB 모드의 실제 K3s 검증을 모두 통과했다. 각각 실제 네 서버, 독립 observed SDK receipt
+검증, paired 자격증명 projection 및 실제 관리자 browser를 사용했다. 원천 모드에서는
+scratch HTTPGet readiness, CRD 작성 block403/unblock200, 수동 변경409,
+RBAC 철회/readiness503, checkpoint를 유지한 Pod 교체의 미전달, UID 교체 거절과
+명시적 repin/새 원천 복구도 확인했다. 거절된 요청은 backend counter를 증가시키지 않았다.
+새로 만든 namespace와 정확한 owned CRD만 정리했다. CRD는 다른 인스턴스 부재를
+확인하고 UID/resourceVersion DELETE 전제조건으로 제거했으며, 동시 native 원천
+운영자가 없는 독립 qualification 조건을 전제로 한다.
+
+최종 static Sumunjang SHA256은
+`25a197f1c39bddf63fe4c168294536475ed2b4ba2aa16bcbe7ee4ac2dfec8654`,
+matching scratch image ID는
+`sha256:9e945256233a035cad07910e6de977c53e8511e3d62d0f83df49c8dfc894df08`다.
+이전 후보의 default UI에서 unknown 상태로 잠근 입력 일부가 로컬 DB 원천 확인 후에도
+풀리지 않는 실제 회귀를 찾았다. 최종 수정은 credential/busy/CAS/data 잠금을 유지하며
+입력 상태를 복원하고 원천/unknown/error에서는 잠금을 유지한다. 새로 빌드한 내장
+UI와 plugin으로 양쪽 실제 browser를 통과했다. source147개, strict Clippy, package8,
+standalone/plugin Chromium, 최종 static의 supervised HUP/readiness/shutdown도 통과했다.
+기존 공개 0.3.5 산출물은 변경하지 않았다.
+
+watch/CNI, API failover, 장기 token 회전, suspend 주입 및 모든 legacy 소비자 cache
+clock을 증명하지 않는다. Source BOOTTIME 현재성과 observed 체인은 기존 한강의
+classic network cache Instant 시간 계약을 바꾸지 않는다. 서명/릴리스/운영 반영은
+별도 통제하에 진행한다.

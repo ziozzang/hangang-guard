@@ -132,3 +132,36 @@ This proves the independent native source, not the new source's full four-servic
 or browser authorization chain, watch/CNI enforcement, long-term token rotation,
 API-server failover or injected suspend. The separate 0.3.6 source version is being
 prepared; signing, release and new-source chain qualification remain separate gates.
+
+## Final 0.3.6 scratch and four-service qualification
+
+The final embedded-dashboard fix and matching plugin at source
+`d6fc1dec893df963c30f483ddf755421a98920b4` passed both real K3s modes:
+exclusive Kubernetes native source and unchanged local DB ownership. Each run
+used the actual four servers, independent observed SDK receipt verification,
+paired credential projection and the real administrator browser. The source
+run also proved scratch HTTPGet readiness, CRD-authored block403/unblock200,
+manual mutation409, RBAC withdrawal/readiness503, checkpoint-preserving Pod
+replacement without dispatch, UID replacement refusal, and explicit repin/new
+source recovery. Refused protected requests did not increment the backend counter.
+Only the newly owned namespaces and exact created CRD were removed; global CRD
+cleanup uses UID/resourceVersion delete preconditions after instance absence
+checks and assumes no concurrent native-source operator.
+
+Final static Sumunjang SHA256:
+`25a197f1c39bddf63fe4c168294536475ed2b4ba2aa16bcbe7ee4ac2dfec8654`.
+The matching scratch image ID is
+`sha256:9e945256233a035cad07910e6de977c53e8511e3d62d0f83df49c8dfc894df08`.
+The previous candidate exposed a real default-mode UI bug: inputs disabled while
+source status was unknown did not all unlock after local DB ownership was known.
+The final fix restores input states while retaining credential/busy/CAS/data locks;
+source or unknown/error status stays locked. Both actual browser modes passed
+with the rebuilt embedded dashboard and matching plugin. Source tests total147,
+strict Clippy, package8, standalone/plugin Chromium and final-static supervised
+HUP/readiness/shutdown checks passed. No published 0.3.5 artifact was modified.
+
+These functional results do not prove watch/CNI enforcement, API failover,
+long-term token rotation, injected suspend or every legacy consumer cache clock.
+Source BOOTTIME eligibility and the observed chain do not change the frozen
+classic Hangang network cache's existing Instant-based timing contract. Signing,
+release and operating adoption remain controlled separately.
