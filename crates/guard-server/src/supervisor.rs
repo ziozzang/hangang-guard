@@ -26,6 +26,7 @@ pub struct Options {
     pub http: SocketAddr,
     pub decision: Option<SocketAddr>,
     pub grpc: Option<SocketAddr>,
+    pub readiness: Option<SocketAddr>,
     pub database: PathBuf,
     pub worker_arguments: Vec<OsString>,
     pub update: Option<UpdateOptions>,
@@ -135,6 +136,7 @@ async fn start(
     http: &TcpListener,
     decision: Option<&TcpListener>,
     grpc: Option<&TcpListener>,
+    readiness: Option<&TcpListener>,
 ) -> Result<Child> {
     let (read, write) = UnixStream::pair()?;
     read.set_nonblocking(true)?;
@@ -160,6 +162,14 @@ async fn start(
     } else {
         command.env_remove("HANGANG_GUARD_GRPC_FD");
     }
+    if let Some(listener) = readiness {
+        command.env(
+            "HANGANG_GUARD_READINESS_FD",
+            listener.as_raw_fd().to_string(),
+        );
+    } else {
+        command.env_remove("HANGANG_GUARD_READINESS_FD");
+    }
     if let Some(update) = &options.update {
         command
             .env("HANGANG_GUARD_UPDATE_STATUS", &update.status_path)
@@ -176,6 +186,7 @@ async fn start(
         Some(http.as_raw_fd()),
         decision.map(AsRawFd::as_raw_fd),
         grpc.map(AsRawFd::as_raw_fd),
+        readiness.map(AsRawFd::as_raw_fd),
         Some(write.as_raw_fd()),
     ];
     let parent_pid = unsafe { libc::getpid() };
@@ -292,6 +303,7 @@ pub async fn run(options: Options) -> Result<()> {
     let http = bind(options.http)?;
     let decision = options.decision.map(bind).transpose()?;
     let grpc = options.grpc.map(bind).transpose()?;
+    let readiness = options.readiness.map(bind).transpose()?;
     let mut current = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
     if let Some(update) = &options.update {
         ensure!(
@@ -317,6 +329,7 @@ pub async fn run(options: Options) -> Result<()> {
         &http,
         decision.as_ref(),
         grpc.as_ref(),
+        readiness.as_ref(),
     )
     .await?;
     let mut term = signal(SignalKind::terminate())?;
@@ -332,7 +345,7 @@ pub async fn run(options: Options) -> Result<()> {
             result = child.wait() => { result?; if let Some(task) = pending.take() { task.abort(); let _ = task.await; } bail!("serving worker exited unexpectedly"); },
             _ = hup.recv() => {
                 stop(&mut child, options.grace).await?;
-                child = start(&executable, &options, &http, decision.as_ref(), grpc.as_ref()).await?;
+                child = start(&executable, &options, &http, decision.as_ref(), grpc.as_ref(), readiness.as_ref()).await?;
             },
             _ = tick.tick() => {
                 if let Some(update) = &options.update {
@@ -364,9 +377,9 @@ pub async fn run(options: Options) -> Result<()> {
                             UpdateManager::rollback(activated)?;
                             return Err(error);
                         }
-                        match start(&executable, &options, &http, decision.as_ref(), grpc.as_ref()).await {
+                        match start(&executable, &options, &http, decision.as_ref(), grpc.as_ref(), readiness.as_ref()).await {
                             Ok(worker) => { child = worker; current = version; activated.discard_rollback()?; status(update, &current.to_string(), "active", Some(&current.to_string()), "candidate ready")?; },
-                            Err(_) => { UpdateManager::rollback(activated)?; child = start(&executable, &options, &http, decision.as_ref(), grpc.as_ref()).await.context("restore prior serving worker")?; status(update, &current.to_string(), "rolled_back", None, "candidate readiness failed; prior binary restored")?; }
+                            Err(_) => { UpdateManager::rollback(activated)?; child = start(&executable, &options, &http, decision.as_ref(), grpc.as_ref(), readiness.as_ref()).await.context("restore prior serving worker")?; status(update, &current.to_string(), "rolled_back", None, "candidate readiness failed; prior binary restored")?; }
                         }
                     },
                     Ok(Err(error)) if error.downcast_ref::<UpToDate>().is_some() => { status(update, &current.to_string(), "up_to_date", Some(&current.to_string()), "signed release is already running")?; },

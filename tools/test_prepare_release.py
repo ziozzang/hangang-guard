@@ -72,6 +72,19 @@ class PreparationTests(unittest.TestCase):
                     expected, name = line.split("  ")
                     self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), expected)
 
+    def test_native_source_operator_docs_and_manifests_are_in_archive(self):
+        required = ("README.md", "README.ko.md", "docs/KUBERNETES_AUTHORITY.md", "docs/ko/KUBERNETES_AUTHORITY.md", "deploy/sumunjang-native-policy.yaml", "deploy/sumunjang-native-authority-deployment.yaml")
+        for name in required:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("owned native source fixture: " + name)
+        release.prepare(None, self.output, release.TARGET, unsigned=True)
+        with tarfile.open(next(self.output.glob("*.tar.gz"))) as archive:
+            for name in required:
+                member = next(m for m in archive if m.name.endswith("/" + name))
+                self.assertEqual(archive.extractfile(member).read().decode(), "owned native source fixture: " + name)
+                self.assertEqual(member.mode, 0o644)
+
     def test_signed_payload_binds_version_target_url_size_digest(self):
         (self.root / "release-public-key.txt").write_text(self.key + "\n")
         release.prepare(self.seed, self.output, release.TARGET)

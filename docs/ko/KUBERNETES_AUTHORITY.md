@@ -36,11 +36,12 @@ sumunjang --kubernetes-authority /etc/sumunjang/native-source.json \
 ```
 
 [Deployment 템플릿](../../deploy/sumunjang-native-authority-deployment.yaml)은 회전되는
-projected token 파일, localhost HTTP 관리, 원격 mTLS binary/gRPC 및 local exec
-`/readyz` probe를 사용한다. 이미지와 실제 UID를 교체하고 별도 검증한 신규 기능
+projected token 파일, localhost HTTP 관리, 원격 mTLS binary/gRPC 및 별도의
+`--readiness-listen` HTTPGet `/readyz` probe를 사용한다. 이미지와 실제 UID를 교체하고 별도 검증한 신규 기능
 빌드를 사용해야 한다. 기존 공개 0.3.5 바이너리에는 이 기능이 없다. 서로 다른
 API 토큰 Secret과 TLS Secret은 미리 생성해야 하며 템플릿은 비밀값을 만들거나
-공개하지 않는다. 이미지는 명시된 probe 도구를 포함해야 한다. source pin/config은
+공개하지 않는다. scratch 이미지에는 static 실행 파일만 필요하며 shell/wget/TLS
+client probe 도구는 필요하지 않다. source pin/config은
 시작 시 한 번 읽으므로 설정 변경 후 재시작한다.
 
 `--check`는 설정과 clock 기능만 검사하며 클러스터 접속/활성화를 증명하지 않는다.
@@ -72,6 +73,13 @@ DB checkpoint로 허용하지 않는다. 재시작 시 모드를 계속 설정�
 관리자가 의도적으로 `--kubernetes-authority`를 제거하면 로컬 DB 모드로 돌아간다.
 기존 timed block/rule의 UTC 의미는 유지되며 BOOTTIME 원천 lease가 이를 바꾸지 않는다.
 
+`--readiness-listen`은 기본 비활성인 별도 plain HTTP listener다. 정확한 GET
+`/healthz`, `/readyz`만 고정된 빈 status 응답으로 처리하고 정책/자격증명/원천 정체성/
+관리 API를 노출하지 않는다. 공유 connection owner로 최대 16 socket, 2048-byte header,
+요청/쓰기 및 drain 1초를 제한하고 body/모호한 framing을 거절하며 한 요청 뒤 닫는다.
+Linux supervisor가 worker 교체/종료 시 listener 소유권을 유지/상속한다. 관리 mTLS를
+유지하면서 scratch 이미지에서도 Kubernetes HTTPGet을 사용할 수 있다.
+
 `/healthz`는 프로세스 생존 확인이다. readiness에는 `/readyz`를 사용한다. 첫 유효
 source 전 또는 만료/철회 후 503을 반환한다. 관리자 인증된
 `GET /v1/kubernetes/authority`는 enabled/available/phase, 불투명 resource_version,
@@ -80,6 +88,26 @@ remaining_ms를 노출하며 비밀값은 내보내지 않는다. 잔여 시간�
 source lease를 표현하지 못하는 기존 `/v1/snapshot`은 비활성화한다. Hangang plugin은
 원천 상태를 표시하고 수동 변경을 비활성화하며 source가 없으면 기존 UI를 유지한다.
 
-소유한 TLS fixture 검사와 실제 클러스터 검증을 구분해야 한다. 아직 배포하지
-않았고 API server failover, 실제 토큰 회전/RBAC 철회, watch/relist, CNI를 검증하지
-않았다. 이 기능은 native 정책 객체 하나를 제한적으로 polling하며 watch controller가 아니다.
+소유한 TLS fixture 검사와 실제 클러스터 검증을 구분해야 한다. 아래 독립 실제 검증은 API server failover, 장기 ServiceAccount token 만료/회전,
+watch/relist, CNI를 증명하지 않는다. 이 기능은 native 정책 객체 하나를 제한적으로 polling하며 watch controller가 아니다.
+
+## 실제 네이티브 원천 검증 (2026-10-15)
+
+독립 실제 K3s 검증을 source `60f19a50a0b29dd44c0d3656629978de0696e0f6`에서 통과했다.
+실제 ServiceAccount GET/CA, mTLS native allow/deny/정책 변경, RBAC 철회와 readiness,
+checkpoint를 유지한 동일 Pod의 container 재시작, 삭제/재생성 UID 거절, 명시적 repin과
+새 Pod 복구를 확인했다. 사전에 없던 CRD와 독립 namespace만 새로 만들고 정체성을
+확인해 정리했다. 기존 workload/PV/Service/DNS는 유지했고 노드 2Ready와 기존 HTTP
+서비스 정상도 확인했다. source/core 141개 검사, strict Clippy, 실제 Chromium plugin
+검사도 통과했다.
+
+정확한 qualification static binary SHA256은
+`7078befe3d12a570ad597fa2a1babc7c1234d8c3440361d4376e58deacce0a61`이며
+독립 image ID는 `sha256:4305a666125b23ec2319d684578cf91e3d3e6597ab038232ed7975df0e1aeaac`,
+utility base는 `alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc`다.
+wget exec readiness와 동일 Pod PID1 재시작을 위해 utility를 사용했으며 shell/wget 없는
+scratch 이미지에서 그 probe가 동작한다는 뜻이 아니다. 공개 산출물은 교체하지 않았다.
+
+새 원천 자체의 검증이며 새 원천을 쓰는 전체 네 서비스/브라우저 인가 체인, watch/CNI,
+장기 token 회전, API failover, suspend 주입을 증명하지 않는다. 별도 0.3.6 source 버전을
+준비하며 서명/릴리스 및 신규 원천 체인 검증은 별도 게이트로 남긴다.

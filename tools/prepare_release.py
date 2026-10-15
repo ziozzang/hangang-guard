@@ -125,6 +125,10 @@ def prepare(seed: Path | None, output: Path, target: str, *, unsigned: bool = Fa
                 for name, path in executables.items():
                     add_file(archive, path, f"{directory}/{name}", 0o755)
                 add_file(archive, license_file, f"{directory}/LICENSE", 0o644)
+                for relative in ("README.md", "README.ko.md", "docs/KUBERNETES_AUTHORITY.md", "docs/ko/KUBERNETES_AUTHORITY.md", "deploy/sumunjang-native-policy.yaml", "deploy/sumunjang-native-authority-deployment.yaml"):
+                    document = ROOT / relative
+                    if document.is_file():
+                        add_file(archive, document, f"{directory}/{relative}", 0o644)
                 package = ROOT / "plugins" / "guard"
                 if package.is_dir():
                     for filename in ("manifest.json", "index.js", "panel.html", "style.css"):

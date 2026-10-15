@@ -1,5 +1,5 @@
 # Template: replace image and actual UID before use; precreate referenced Secrets.
-# Image must contain /usr/local/bin/sumunjang, /bin/sh and wget for local readiness.
+# Image needs only the static /usr/local/bin/sumunjang executable; scratch is supported.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -42,6 +42,7 @@ spec:
             - --kubernetes-authority=/etc/sumunjang/source/source.json
             - --database=/var/lib/sumunjang/policy.sqlite3
             - --listen=127.0.0.1:9080
+            - --readiness-listen=0.0.0.0:9083
             - --decision-listen=0.0.0.0:9081
             - --grpc-listen=0.0.0.0:9082
             - --decision-tls-cert=/etc/sumunjang/tls/tls.crt
@@ -58,8 +59,9 @@ spec:
             - {name: binary-mtls, containerPort: 9081}
             - {name: grpc-mtls, containerPort: 9082}
           readinessProbe:
-            exec:
-              command: [/bin/sh, -c, 'wget -q -O /dev/null http://127.0.0.1:9080/readyz']
+            httpGet:
+              path: /readyz
+              port: 9083
             periodSeconds: 1
             timeoutSeconds: 1
             failureThreshold: 1

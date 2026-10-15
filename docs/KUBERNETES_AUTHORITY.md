@@ -40,11 +40,12 @@ sumunjang --kubernetes-authority /etc/sumunjang/native-source.json \
 
 A [Deployment template](../deploy/sumunjang-native-authority-deployment.yaml)
 uses a rotating projected token file, localhost-only HTTP administration, remote
-mTLS binary/gRPC, and `/readyz` through a local exec probe. Replace the image with
+mTLS binary/gRPC, and HTTPGet `/readyz` on a separate `--readiness-listen` port. Replace the image with
 a separately qualified native-authority build and set the actual UID. Existing
 public 0.3.5 artifacts do not include this feature. Precreate the distinct API
 credential Secret and TLS Secret; the template does not generate or publish
-credentials. Its image must provide the documented probe utilities. Config
+credentials. A scratch image needs only the static executable; the probe needs no
+shell, wget or TLS client utility. Config
 identity is loaded once; restart after changing the source pin/config file.
 
 `--check` validates config and clock capability without contacting the cluster;
@@ -83,6 +84,15 @@ The process mode must remain configured across restarts; deliberately removing
 Native timed blocks/rules retain their documented UTC semantics; the BOOTTIME
 source lease does not redefine those independent native policy conditions.
 
+`--readiness-listen` is optional and absent by default. Its separate plain HTTP
+listener accepts only exact GET `/healthz` and `/readyz`, with fixed empty status
+replies; it exposes no policy, credentials, source identity or management routes.
+It reuses the shared bounded connection owner (16 sockets, 2048-byte headers,
+one-second request/write and drain bounds), refuses request bodies/ambiguous
+framing, and closes after one request. The Linux supervisor owns/inherits that
+listener through worker replacement and shutdown. Kubernetes HTTPGet can use it
+with a scratch image while management remains mTLS.
+
 `/healthz` is process liveness. Use `/readyz` for readiness: it returns 503 until a
 current source is available, and again on expiry/withdrawal. Authenticated
 `GET /v1/kubernetes/authority` exposes enabled/available, phase, opaque source
@@ -94,6 +104,31 @@ The Hangang console plugin displays source authority/freshness and disables
 manual mutations. Local DB behavior is retained when the source is absent.
 
 Qualification must distinguish owned TLS fixture tests from a live Kubernetes
-cluster. These changes have not yet been deployed or qualified against API-server
-failover, real ServiceAccount rotation, RBAC revocation, watch/relist, or CNI.
+cluster. The independent live test below does not qualify API-server failover, long-term
+ServiceAccount token expiry/rotation, watch/relist, or CNI.
 This is bounded polling of one native policy object, not a watch controller.
+
+## Live native-source qualification (2026-10-15)
+
+The independent live K3s test passed at source
+`60f19a50a0b29dd44c0d3656629978de0696e0f6`: actual ServiceAccount GET/CA,
+mTLS native allow/deny and policy update, RBAC withdrawal/readiness, same-Pod
+container restart with its existing checkpoint, deletion/replacement UID refusal,
+and explicit repin/new-Pod recovery. Only the newly owned namespace and absent
+CRD were created, then their identities were checked before cleanup. Existing
+workloads, PVs, Services and DNS were preserved; both nodes and existing HTTP
+services remained healthy. Source/core tests total 141 and strict Clippy and
+actual Chromium plugin checks also passed.
+
+The exact qualification static binary SHA256 is
+`7078befe3d12a570ad597fa2a1babc7c1234d8c3440361d4376e58deacce0a61`.
+Unique image ID is
+`sha256:4305a666125b23ec2319d684578cf91e3d3e6597ab038232ed7975df0e1aeaac`,
+using utility base
+`alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc`.
+The utilities support wget exec readiness and same-Pod PID1 restart; a scratch
+image without shell/wget cannot run that probe. No public artifact was replaced.
+This proves the independent native source, not the new source's full four-service
+or browser authorization chain, watch/CNI enforcement, long-term token rotation,
+API-server failover or injected suspend. The separate 0.3.6 source version is being
+prepared; signing, release and new-source chain qualification remain separate gates.

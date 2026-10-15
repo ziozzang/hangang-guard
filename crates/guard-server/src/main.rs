@@ -4,6 +4,7 @@ mod kubernetes;
 mod kubernetes_authority;
 mod lua_rules;
 mod protocol;
+mod readiness;
 #[cfg(target_os = "linux")]
 mod supervisor;
 use axum::{
@@ -85,6 +86,9 @@ struct Args {
     /// Optional persistent binary decision endpoint; remote listeners require mTLS.
     #[arg(long)]
     decision_listen: Option<std::net::SocketAddr>,
+    /// Optional plain HTTP /healthz and source-aware /readyz only; no management routes.
+    #[arg(long)]
+    readiness_listen: Option<std::net::SocketAddr>,
     /// Additional gRPC network decisions; mTLS required.
     #[arg(long, requires_all = ["decision_tls_cert", "decision_listen"])]
     grpc_listen: Option<std::net::SocketAddr>,
@@ -1037,6 +1041,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 })?,
                 decision: args.decision_listen,
                 grpc: args.grpc_listen,
+                readiness: args.readiness_listen,
                 database: args.database.clone(),
                 worker_arguments: worker_arguments(),
                 update,
@@ -1136,6 +1141,27 @@ async fn run(args: Args) -> anyhow::Result<()> {
             stop_rx.clone(),
         ));
     }
+    let readiness_worker = if let Some(address) = args.readiness_listen {
+        let listener = if args.serve_child {
+            #[cfg(target_os = "linux")]
+            {
+                supervisor::inherited_listener("HANGANG_GUARD_READINESS_FD", address)?
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                anyhow::bail!("supervised workers require Linux");
+            }
+        } else {
+            tokio::net::TcpListener::bind(address).await?
+        };
+        Some(tokio::spawn(readiness::serve(
+            listener,
+            app.clone(),
+            stop_rx.clone(),
+        )))
+    } else {
+        None
+    };
     let binary_worker = if let Some(address) = args.decision_listen {
         anyhow::ensure!(
             (address.ip().is_loopback() || args.decision_tls_cert.is_some())
@@ -1250,6 +1276,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
         worker.await??;
     }
     if let Some(worker) = grpc_worker {
+        worker.await??;
+    }
+    if let Some(worker) = readiness_worker {
         worker.await??;
     }
     if let Some(worker) = native_worker {

@@ -492,6 +492,66 @@ mod tests {
         restarted.native_source = Some(Owner::new().unwrap());
         assert!(restarted.source_remaining(&fresh).is_none());
     }
+    #[tokio::test]
+    async fn separate_http_probe_tracks_fresh_expired_and_new_publication() {
+        let app = owned_app();
+        publish(&app, 80);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(crate::readiness::serve(listener, app.clone(), rx));
+        let client = reqwest::Client::new();
+        assert_eq!(
+            client
+                .get(format!("http://{address}/readyz"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        assert_eq!(
+            client
+                .get(format!("http://{address}/readyz"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            503
+        );
+        assert_eq!(
+            client
+                .get(format!("http://{address}/healthz"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        publish(&app, 1000);
+        assert_eq!(
+            client
+                .get(format!("http://{address}/readyz"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        app.native_source.as_ref().unwrap().withdraw();
+        assert_eq!(
+            client
+                .get(format!("http://{address}/readyz"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            503
+        );
+        tx.send(true).unwrap();
+        task.await.unwrap().unwrap();
+    }
     #[test]
     fn source_read_failure_and_reversal_irreversibly_retire_publication() {
         for fail_clock in [false, true] {
