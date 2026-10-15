@@ -5,7 +5,7 @@
   "api_version": 1,
   "entry": "index.js",
   "assets": {
-    "index.js": "970bc892e2a2a084d7818de350d7316ff356b386ba8db792267123d56912e7f9",
+    "index.js": "f80b3b4b5341773ba4bcd0ec556f4cbfacc092a69e092f9d5a719599a492b5e5",
     "panel.html": "cb123669bc22c493db0535baa4a157967fb9895fb957c3e23a1136ef3ab3b52c",
     "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
   },
