@@ -1,0 +1,99 @@
+# Native Kubernetes policy authority
+
+[한국어](ko/KUBERNETES_AUTHORITY.md)
+
+This opt-in source makes one authenticated `SumunjangPolicy` object authoritative
+for Sumunjang's existing native IP decision engine. It does not activate CNI or
+translate standard Kubernetes NetworkPolicy into an IP-only `Network.Check`.
+The existing `--kubernetes-policy-source` NetworkPolicy diagnostics remain separate.
+
+Install the CRD, namespace and example object in
+[deploy/sumunjang-native-policy.yaml](../deploy/sumunjang-native-policy.yaml).
+Install the CRD first and wait for `Established` before creating the object.
+The example includes a read-only ServiceAccount/Role limited to GET of one name.
+Administrator write access to that object is policy authority; grant it separately.
+Read its generated UID and configure an administrator-owned JSON file:
+
+```json
+{
+  "api": "https://kubernetes.default.svc",
+  "namespace": "hangang-security",
+  "name": "native-ip-policy",
+  "uid": "REPLACE-WITH-ACTUAL-OBJECT-UID",
+  "ca": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+  "token_env": "SUMUNJANG_KUBERNETES_TOKEN"
+}
+```
+
+Set the referenced environment variable from the mounted ServiceAccount token
+using your service's credential injection. The config stores a reference, never
+a token value. Restart the source process when rotating environment credentials.
+Alternatively configure `token_file` instead of `token_env` (exactly one is
+required). A bounded projected token file and the CA file are reread each cycle,
+so file rotation does not retain a previous credential pool. Use reviewed server/service identities and mTLS
+for Sumunjang's own remote decision/management endpoints as usual.
+
+```sh
+sumunjang --kubernetes-authority /etc/sumunjang/native-source.json \
+  --database /var/lib/sumunjang/policy.sqlite3
+```
+
+A [Deployment template](../deploy/sumunjang-native-authority-deployment.yaml)
+uses a rotating projected token file, localhost-only HTTP administration, remote
+mTLS binary/gRPC, and `/readyz` through a local exec probe. Replace the image with
+a separately qualified native-authority build and set the actual UID. Existing
+public 0.3.5 artifacts do not include this feature. Precreate the distinct API
+credential Secret and TLS Secret; the template does not generate or publish
+credentials. Its image must provide the documented probe utilities. Config
+identity is loaded once; restart after changing the source pin/config file.
+
+`--check` validates config and clock capability without contacting the cluster;
+it does not prove activation. Source mode conflicts with `--policy`,
+`--bootstrap-policy` and `--asn-catalog`. Native source requires a suspend-inclusive
+clock (currently Linux BOOTTIME); default local DB mode has no new clock requirement.
+
+The CRD `spec` contains normal bounded native `policy`, optional `rules`, `blocks`
+and `asn_catalog`. Existing validators, prefix trees, GeoIP matching, priorities,
+allowlist and block semantics run unchanged in the same compiled DecisionView.
+`auto_block` must be false: event aggregation and all competing policy/rule/block/
+Lua/GeoIP reload writers are disabled. Startup GeoIP files remain an independently
+configured, immutable process catalog for native geographic rules; they are not
+Kubernetes Pod identities. There is no second policy overlay or per-query API call.
+Malformed or unsupported native spec fields fail the entire observation.
+
+The source performs an authenticated HTTPS GET of exactly the pinned namespaced
+name, with pinned CA, no ambient proxy/roots or redirect following. The returned
+kind, namespace, name and UID must match; deletionTimestamp, missing resourceVersion,
+replacement UID, non-200, timeout, oversized response or compile/persist failure
+withdraw authorization. ResourceVersion is opaque, not a numeric ordering claim.
+The original one-second process-local BOOTTIME lease begins before credential,
+TLS, transfer, decode, compile and durable publication work; all consume that
+budget. Successful cycles wait 500ms before the next GET and withdraw the prior
+publication before collection. A newly authenticated complete GET may renew an
+unchanged resourceVersion; rereading a captured publication never renews it.
+
+Every HTTP/binary/gRPC decision is gated by the exact native view and its source
+publication generation, with TTL capped by the remaining original source lease.
+Expiry, reversed clock observations or read failure irreversibly retire that
+publication. A later fresh GET may create a new generation but cannot revive a
+captured old view. Cancellation/task exit withdraws the source. Checkpoint state
+cannot grant while a restarted source process awaits its first authenticated GET.
+The process mode must remain configured across restarts; deliberately removing
+`--kubernetes-authority` returns to the operator-selected local DB mode.
+Native timed blocks/rules retain their documented UTC semantics; the BOOTTIME
+source lease does not redefine those independent native policy conditions.
+
+`/healthz` is process liveness. Use `/readyz` for readiness: it returns 503 until a
+current source is available, and again on expiry/withdrawal. Authenticated
+`GET /v1/kubernetes/authority` exposes enabled/available, phase, opaque source
+resource_version and remaining_ms without credentials. Those remaining values are
+local observations, not transferable signed authorization. Manual mutation
+requests are rejected before body/Lua decoding. Legacy reusable `/v1/snapshot`
+is disabled in source mode because its format cannot carry the source lease.
+The Hangang console plugin displays source authority/freshness and disables
+manual mutations. Local DB behavior is retained when the source is absent.
+
+Qualification must distinguish owned TLS fixture tests from a live Kubernetes
+cluster. These changes have not yet been deployed or qualified against API-server
+failover, real ServiceAccount rotation, RBAC revocation, watch/relist, or CNI.
+This is bounded polling of one native policy object, not a watch controller.

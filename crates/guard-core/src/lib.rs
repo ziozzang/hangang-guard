@@ -893,6 +893,15 @@ impl Engine {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    /// Assign a fresh publication revision without rebuilding or losing native indexes.
+    pub fn advance_revision_past(&mut self, previous: u64) -> Result<()> {
+        self.revision = self
+            .revision
+            .max(previous)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("decision revision exhausted"))?;
+        Ok(())
+    }
     pub fn decision_view(&self) -> DecisionView {
         DecisionView {
             revision: self.revision,
@@ -1273,5 +1282,48 @@ impl Engine {
         result.score = result.signal_score.saturating_add(result.static_rule_score);
         result.suspicion = Suspicion::from_score(result.score, self.policy.threshold, false);
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod publication_revision_tests {
+    use super::*;
+    #[test]
+    fn rebase_preserves_asn_rule_and_refuses_overflow() {
+        let mut engine = Engine::new(Policy {
+            mode: Mode::Enforce,
+            ..Policy::default()
+        })
+        .unwrap();
+        engine
+            .set_asn_catalog(vec![AsnPrefix {
+                network: "192.0.2.0/24".into(),
+                asn: 64512,
+            }])
+            .unwrap();
+        engine
+            .set_rules(RuleSet {
+                version: 1,
+                rules: vec![Rule {
+                    id: "asn-deny".into(),
+                    priority: 0,
+                    network: None,
+                    countries: vec![],
+                    asns: vec![64512],
+                    action: RuleAction::Deny,
+                    score: 0,
+                    expires_at: None,
+                    description: String::new(),
+                }],
+            })
+            .unwrap();
+        engine.advance_revision_past(100).unwrap();
+        assert_eq!(engine.revision(), 101);
+        assert_eq!(engine.decision("192.0.2.1", 1).unwrap().action, "deny");
+        engine.advance_revision_past(1).unwrap();
+        assert_eq!(engine.revision(), 102);
+        assert!(engine.advance_revision_past(u64::MAX).is_err());
+        assert_eq!(engine.revision(), 102);
+        assert_eq!(engine.decision("192.0.2.1", 1).unwrap().action, "deny");
     }
 }

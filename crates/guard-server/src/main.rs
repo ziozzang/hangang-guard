@@ -1,6 +1,7 @@
 mod geoip;
 mod grpc;
 mod kubernetes;
+mod kubernetes_authority;
 mod lua_rules;
 mod protocol;
 #[cfg(target_os = "linux")]
@@ -50,6 +51,9 @@ struct Args {
     /// Continuously collect a read-only policy source for authenticated diagnostics.
     #[arg(long)]
     kubernetes_policy_source: Option<PathBuf>,
+    /// Exclusively authorize native IP policy from one pinned Kubernetes CRD.
+    #[arg(long, conflicts_with_all = ["policy", "bootstrap_policy", "asn_catalog"])]
+    kubernetes_authority: Option<PathBuf>,
     /// Validate configured credentials, stored policy and GeoIP without writes/listeners.
     #[arg(long)]
     check: bool,
@@ -128,10 +132,16 @@ struct App {
     admin: Arc<String>,
     update_status: Option<PathBuf>,
     update_request: Option<PathBuf>,
+    native_source: Option<Arc<kubernetes_authority::Owner>>,
     network_source: Arc<arc_swap::ArcSwapOption<kubernetes::SourceSnapshot>>,
     network_source_phase: Arc<std::sync::atomic::AtomicU8>,
 }
 impl App {
+    fn source_remaining(&self, view: &guard_core::DecisionView) -> Option<u64> {
+        self.native_source
+            .as_ref()
+            .map_or(Some(5000), |owner| owner.remaining(view))
+    }
     fn query<'a>(
         &self,
         view: &'a guard_core::DecisionView,
@@ -230,6 +240,12 @@ async fn operation<F>(app: App, durable: bool, f: F) -> ApiResult
 where
     F: FnOnce(&mut Engine) -> anyhow::Result<Value> + Send + 'static,
 {
+    if app.native_source.is_some() && durable {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "exclusive Kubernetes policy owner",
+        ));
+    }
     let permit = app
         .workers
         .clone()
@@ -282,6 +298,12 @@ where
 }
 
 async fn events(HttpState(app): HttpState<App>, Json(batch): Json<EventBatch>) -> ApiResult {
+    if app.native_source.is_some() {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "exclusive Kubernetes policy owner",
+        ));
+    }
     let received = now();
     if batch.events.len() > 256
         || batch.source_id.is_empty()
@@ -335,7 +357,21 @@ async fn decision(
     }
     let time = now();
     let view = app.view.load();
-    let before = app.query(&view, input.ip, time);
+    let mut before = app.query(&view, input.ip, time);
+    if app.native_source.is_some() {
+        let remaining = app
+            .source_remaining(&view)
+            .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "native source unavailable"))?;
+        before.ttl_ms = before.ttl_ms.min(remaining);
+        // Event aggregation is a separate policy writer, forbidden in source mode.
+        if input.kind.is_some() {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "exclusive Kubernetes policy owner",
+            ));
+        }
+        return Ok(Json(before).into_response());
+    }
     // Admission reads never wait for evidence aggregation or admin fsync.
     if input.kind.is_none() || before.action == "deny" {
         return Ok(Json(before).into_response());
@@ -476,6 +512,12 @@ async fn network_inspect(HttpState(app): HttpState<App>, Json(input): Json<Netwo
     .await
 }
 async fn geo_reload(HttpState(app): HttpState<App>) -> ApiResult {
+    if app.native_source.is_some() {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "exclusive Kubernetes policy owner",
+        ));
+    }
     let _permit = app
         .geo_reload
         .clone()
@@ -560,12 +602,30 @@ async fn rules_validate(
     };
     Ok(Json(json!({"valid":true,"rules":rules})))
 }
+async fn native_source_status(HttpState(app): HttpState<App>) -> Json<Value> {
+    Json(
+        app.native_source
+            .as_ref()
+            .map_or(json!({"enabled":false}), |owner| {
+                owner.report(&app.view.load())
+            }),
+    )
+}
+async fn ready(HttpState(app): HttpState<App>) -> Response {
+    if app.source_remaining(&app.view.load()).is_some() {
+        Json(json!({"status":"ready"})).into_response()
+    } else {
+        error(StatusCode::SERVICE_UNAVAILABLE, "native source unavailable").into_response()
+    }
+}
 fn router(app: App) -> Router {
     let credentials = app.clone();
     let requests = Arc::new(tokio::sync::Semaphore::new(app.max_http_requests));
     Router::new()
         .route("/", get(|| async { Html(include_str!("dashboard.html")) }))
         .route("/healthz", get(|| async { Json(json!({"status":"ok"})) }))
+        .route("/readyz", get(ready))
+        .route("/v1/kubernetes/authority", get(native_source_status))
         .route(
             "/v1/decision",
             post(decision).layer(DefaultBodyLimit::max(4096)),
@@ -632,6 +692,31 @@ fn router(app: App) -> Router {
                         && let Err(e) = authorize(request.headers(), token)
                     {
                         return e.into_response();
+                    }
+                    if path == "/v1/decision"
+                        && credentials
+                            .source_remaining(&credentials.view.load())
+                            .is_none()
+                    {
+                        return error(StatusCode::SERVICE_UNAVAILABLE, "native source unavailable")
+                            .into_response();
+                    }
+                    // Refuse competing writers before JSON/Lua/body decoding.
+                    if credentials.native_source.is_some()
+                        && (path == "/v1/snapshot"
+                            || (request.method() != axum::http::Method::GET
+                                && !matches!(
+                                    path,
+                                    "/v1/decision"
+                                        | "/v1/kubernetes/evaluate"
+                                        | "/v1/lookup"
+                                        | "/v1/networks/inspect"
+                                        | "/v1/rules/validate"
+                                        | "/v1/update/check"
+                                )))
+                    {
+                        return error(StatusCode::CONFLICT, "exclusive Kubernetes policy owner")
+                            .into_response();
                     }
                     next.run(request).await
                 }
@@ -726,6 +811,11 @@ fn read_bounded(path: &std::path::Path, max: usize) -> anyhow::Result<Vec<u8>> {
 }
 
 fn check_configuration(args: &Args) -> anyhow::Result<()> {
+    if let Some(path) = &args.kubernetes_authority {
+        kubernetes_authority::Config::load(path)?;
+        kubernetes_authority::Owner::new()?;
+    }
+
     if args.update_github || args.update_manifest.is_some() {
         let key = std::env::var(&args.update_key_env)
             .map_err(|_| anyhow::anyhow!("update public-key environment variable unavailable"))?;
@@ -998,7 +1088,17 @@ async fn run(args: Args) -> anyhow::Result<()> {
         asn: args.geoip_asn_database,
     };
     let geo = geoip::GeoCatalog::load(&geo_paths)?;
+    let native_config = args
+        .kubernetes_authority
+        .as_ref()
+        .map(|p| kubernetes_authority::Config::load(p))
+        .transpose()?;
+    let native_source = native_config
+        .as_ref()
+        .map(|_| kubernetes_authority::Owner::new())
+        .transpose()?;
     let app = App {
+        native_source,
         network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
         network_source_phase: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         geo: Arc::new(arc_swap::ArcSwap::from_pointee(geo)),
@@ -1021,6 +1121,13 @@ async fn run(args: Args) -> anyhow::Result<()> {
             .flatten(),
     };
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let native_worker = native_config.map(|config| {
+        tokio::spawn(kubernetes_authority::follow(
+            app.clone(),
+            config,
+            stop_rx.clone(),
+        ))
+    });
     if let Some(path) = args.kubernetes_policy_source {
         tokio::spawn(kubernetes::follow_source(
             path,
@@ -1106,6 +1213,17 @@ async fn run(args: Args) -> anyhow::Result<()> {
     eprintln!("sumunjang listening on {}", listener.local_addr()?);
     let shutdown_stop = stop_tx.clone();
     if args.serve_child {
+        // A replacement source-owned worker must obtain fresh authority before
+        // the stable supervisor retires its previous generation.
+        if app.native_source.is_some() {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while app.source_remaining(&app.view.load()).is_none() {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("native source not ready"))?;
+        }
         #[cfg(target_os = "linux")]
         supervisor::notify_ready()?;
     }
@@ -1133,6 +1251,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
     if let Some(worker) = grpc_worker {
         worker.await??;
+    }
+    if let Some(worker) = native_worker {
+        worker.await?;
     }
     checkpoint(app).await?;
     serving?;
@@ -1180,6 +1301,7 @@ mod tests {
         db.execute_batch("CREATE TABLE checkpoint(id INTEGER PRIMARY KEY,body TEXT NOT NULL)")
             .unwrap();
         App {
+            native_source: None,
             network_source: Arc::new(arc_swap::ArcSwapOption::empty()),
             network_source_phase: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             geo: Arc::new(arc_swap::ArcSwap::from_pointee(geoip::GeoCatalog::default())),

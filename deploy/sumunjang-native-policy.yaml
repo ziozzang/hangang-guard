@@ -1,0 +1,98 @@
+# Install CRD before creating the object below. This is native IP policy, not CNI.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sumunjangpolicies.policy.hangang.dev
+spec:
+  group: policy.hangang.dev
+  scope: Namespaced
+  names:
+    plural: sumunjangpolicies
+    singular: sumunjangpolicy
+    kind: SumunjangPolicy
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [policy]
+              properties:
+                policy:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                rules:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                blocks:
+                  type: array
+                  maxItems: 65536
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                asn_catalog:
+                  type: array
+                  maxItems: 65536
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hangang-security
+---
+apiVersion: policy.hangang.dev/v1alpha1
+kind: SumunjangPolicy
+metadata:
+  namespace: hangang-security
+  name: native-ip-policy
+spec:
+  policy:
+    mode: enforce
+    auto_block: false
+    allow: []
+  rules:
+    version: 1
+    rules:
+      - id: example-deny
+        network: 192.0.2.0/24
+        action: deny
+  blocks: []
+  asn_catalog: []
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sumunjang-policy-reader
+  namespace: hangang-security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sumunjang-policy-reader
+  namespace: hangang-security
+rules:
+  - apiGroups: [policy.hangang.dev]
+    resources: [sumunjangpolicies]
+    resourceNames: [native-ip-policy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sumunjang-policy-reader
+  namespace: hangang-security
+subjects:
+  - kind: ServiceAccount
+    name: sumunjang-policy-reader
+    namespace: hangang-security
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sumunjang-policy-reader

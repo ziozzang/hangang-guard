@@ -1,0 +1,94 @@
+# Template: replace image and actual UID before use; precreate referenced Secrets.
+# Image must contain /usr/local/bin/sumunjang, /bin/sh and wget for local readiness.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sumunjang-native-source
+  namespace: hangang-security
+data:
+  source.json: |
+    {
+      "api": "https://kubernetes.default.svc",
+      "namespace": "hangang-security",
+      "name": "native-ip-policy",
+      "uid": "REPLACE-WITH-ACTUAL-OBJECT-UID",
+      "ca": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+      "token_file": "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sumunjang-native-authority
+  namespace: hangang-security
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sumunjang-native-authority}
+  template:
+    metadata:
+      labels: {app: sumunjang-native-authority}
+    spec:
+      serviceAccountName: sumunjang-policy-reader
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: sumunjang
+          image: REPLACE_WITH_QUALIFIED_NATIVE_AUTHORITY_IMAGE
+          command: [/usr/local/bin/sumunjang]
+          args:
+            - --kubernetes-authority=/etc/sumunjang/source/source.json
+            - --database=/var/lib/sumunjang/policy.sqlite3
+            - --listen=127.0.0.1:9080
+            - --decision-listen=0.0.0.0:9081
+            - --grpc-listen=0.0.0.0:9082
+            - --decision-tls-cert=/etc/sumunjang/tls/tls.crt
+            - --decision-tls-key=/etc/sumunjang/tls/tls.key
+            - --decision-client-ca=/etc/sumunjang/tls/ca.crt
+          env:
+            - name: HANGANG_GUARD_COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef: {name: sumunjang-api-tokens, key: collector}
+            - name: HANGANG_GUARD_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: {name: sumunjang-api-tokens, key: admin}
+          ports:
+            - {name: binary-mtls, containerPort: 9081}
+            - {name: grpc-mtls, containerPort: 9082}
+          readinessProbe:
+            exec:
+              command: [/bin/sh, -c, 'wget -q -O /dev/null http://127.0.0.1:9080/readyz']
+            periodSeconds: 1
+            timeoutSeconds: 1
+            failureThreshold: 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: source, mountPath: /etc/sumunjang/source, readOnly: true}
+            - {name: tls, mountPath: /etc/sumunjang/tls, readOnly: true}
+            - {name: state, mountPath: /var/lib/sumunjang}
+      volumes:
+        - name: source
+          configMap: {name: sumunjang-native-source}
+        - name: tls
+          secret: {secretName: sumunjang-decision-tls}
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sumunjang-native-authority
+  namespace: hangang-security
+spec:
+  selector: {app: sumunjang-native-authority}
+  ports:
+    - {name: binary-mtls, port: 9081, targetPort: binary-mtls}
+    - {name: grpc-mtls, port: 9082, targetPort: grpc-mtls}

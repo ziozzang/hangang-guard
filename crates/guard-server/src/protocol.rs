@@ -106,7 +106,12 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
                 let request: &[u8; REQUEST_LEN] =
                     requests[offset..offset + REQUEST_LEN].try_into()?;
                 let (correlation, ip) = decode(request)?;
-                let decision = app.query(&view, ip, time);
+                let mut decision = app.query(&view, ip, time);
+                if let Some(remaining) = app.source_remaining(&view) {
+                    decision.ttl_ms = decision.ttl_ms.min(remaining);
+                } else {
+                    anyhow::bail!("native policy source unavailable");
+                }
                 let frame = &mut responses[offset..offset + REQUEST_LEN];
                 frame.fill(0);
                 frame[0] = 1;
@@ -115,6 +120,14 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin>(
                 frame[4..8].copy_from_slice(&correlation.to_be_bytes());
                 frame[8..16].copy_from_slice(&decision.revision.to_be_bytes());
                 frame[16..20].copy_from_slice(&(decision.ttl_ms as u32).to_be_bytes());
+            }
+            let remaining = app
+                .source_remaining(&view)
+                .ok_or_else(|| anyhow::anyhow!("native policy source unavailable"))?;
+            for frame in responses[..complete].chunks_exact_mut(REQUEST_LEN) {
+                let ttl =
+                    u32::from_be_bytes(frame[16..20].try_into().unwrap()).min(remaining as u32);
+                frame[16..20].copy_from_slice(&ttl.to_be_bytes());
             }
         }
         timeout(WRITE_TIMEOUT, stream.write_all(&responses[..complete])).await??;

@@ -5,11 +5,16 @@
   "api_version": 1,
   "entry": "index.js",
   "assets": {
-    "index.js": "2f8c58df4d9edad58007f2419d59d858a110695d112df1940771da2c70b6a0d0",
-    "panel.html": "efb797dd3b2f5e09e13ec2f2e7c1c69887af18d7d37edc2c7770ce3e79f7ab8f",
+    "index.js": "a583e46c4fec41302fbbcdb07713c2c49d9e87efa852e3ea5993a9077cc2f3a2",
+    "panel.html": "cb123669bc22c493db0535baa4a157967fb9895fb957c3e23a1136ef3ab3b52c",
     "style.css": "e5b4f3daee0176dceb63a0c7a56c6be2f32d7e3b6b5eb22a4ce13505f6ee7f39"
   },
   "routes": [
+    {
+      "path": "kubernetes/authority",
+      "method": "GET",
+      "mutation": false
+    },
     {
       "path": "kubernetes/status",
       "method": "GET",

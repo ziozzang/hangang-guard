@@ -30,6 +30,9 @@ fn caller(app: &App, metadata: &tonic::metadata::MetadataMap) -> Result<(), Stat
     {
         return Err(Status::unauthenticated("collector credential required"));
     }
+    if app.source_remaining(&app.view.load()).is_none() {
+        return Err(Status::unavailable("native policy source unavailable"));
+    }
     Ok(())
 }
 fn authenticate_transport<S>(
@@ -87,7 +90,9 @@ impl Service {
         geo: Option<&Arc<crate::geoip::GeoCatalog>>,
         decision: guard_core::DecisionRef<'_>,
     ) -> NetworkReply {
-        let available = decision.revision >= minimum_revision
+        let source_remaining = self.app.source_remaining(view);
+        let available = source_remaining.is_some()
+            && decision.revision >= minimum_revision
             && Arc::ptr_eq(view, &self.app.view.load_full())
             && geo.is_none_or(|captured| Arc::ptr_eq(captured, &self.app.geo.load_full()));
         NetworkReply {
@@ -108,7 +113,7 @@ impl Service {
                 1
             },
             ttl_ms: if available {
-                decision.ttl_ms.min(5000) as u32
+                decision.ttl_ms.min(source_remaining.unwrap_or(0)).min(5000) as u32
             } else {
                 0
             },
@@ -145,6 +150,24 @@ pub async fn serve(
         })
         .await?;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) async fn fixture_check(app: App, ip: Vec<u8>) -> Result<NetworkReply, Status> {
+    let service = Service {
+        app,
+        requests: Arc::new(Semaphore::new(1)),
+    };
+    let mut request = Request::new(NetworkRequest {
+        request_id: 42,
+        ip,
+        minimum_revision: 0,
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        "Bearer collector-test-token".parse().unwrap(),
+    );
+    service.check(request).await.map(Response::into_inner)
 }
 
 #[cfg(test)]
@@ -531,5 +554,23 @@ mod tests {
         assert_eq!(polls.load(Ordering::SeqCst), 0);
         drop(held);
         assert_eq!(ingress.available_permits(), 1);
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn unavailable_native_source_refuses_before_protobuf_body_poll() {
+        let mut app = crate::tests::app();
+        app.native_source = Some(crate::kubernetes_authority::Owner::new().unwrap());
+        let (body, polls) = predecode_body(vec![], true);
+        let service = predecode_service(app, Arc::new(Semaphore::new(1)));
+        let response = service
+            .oneshot(predecode_request(
+                PREDECODE_PATH,
+                &["Bearer collector-test-token"],
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(predecode_response(response).await.0, 14);
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
     }
 }
