@@ -56,7 +56,9 @@ def route(r):
     if path == 'status' and bad_status:
         r.fulfill(status=200, body='<html>malformed API response</html>')
         return
-    if path == 'status':
+    if path == 'kubernetes/authority':
+        data = {'enabled': False}
+    elif path == 'status':
         data = {'health': 'ok', 'capacity': {'candidates': len(candidates), 'blocks': len(blocks), 'max_candidates': 10000, 'max_blocks': 100000}, 'stats': {'accepted': 20000, 'dropped_capacity': 3, 'block_capacity_rejections': 0}, 'metrics': {'index': 'radix'}, 'geoip': {'country': {'database_type': 'GeoLite2-Country', 'build_epoch': now, 'bytes': 4096}, 'asn': None}}
     elif path == 'update/status':
         data = {'enabled': True, 'phase': 'up_to_date', 'current_version': '0.3.0'}

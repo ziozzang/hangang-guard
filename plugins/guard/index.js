@@ -16,7 +16,10 @@ function markDirty(){el('policy-dirty').textContent=policyDirty?'저장하지 �
 function policyControls(){root.querySelectorAll('#policy-form input,#policy-form select,#policy-json,#allow-network,#allow-text').forEach(field=>field.disabled=busy);if(policyUncertain){el('allow-save').disabled=true;el('policy-form').querySelector('button[type=submit]').disabled=true;}}
 function authorityControls(){
  const locked=nativeAuthority===null||nativeAuthority.enabled===true;
- root.querySelectorAll('#policy-form input,#policy-form select,#policy-form button,#policy-json,#allow-network,#allow-text,#allow-save,#allow-apply,#json-apply,#rules-save,#lua-save,#geoip-reload,#block-form input,#block-form button,[data-mutation=true]').forEach(field=>{if(locked)field.disabled=true;});
+ // Restore only inputs owned here. Buttons retain connectionUI's credential,
+ // busy, uncertain-CAS and data-lock result; source state can only lock them.
+ root.querySelectorAll('#policy-form input,#policy-form select,#policy-json,#allow-network,#allow-text,#rules-json,#rules-lua,#block-form input,#block-form select,#block-form textarea').forEach(field=>field.disabled=!credential||busy||locked||field.dataset.lock==='true');
+ if(locked)root.querySelectorAll('#policy-form button,#allow-save,#allow-apply,#json-apply,#rules-save,#lua-save,#geoip-reload,#block-form button,[data-mutation=true]').forEach(button=>button.disabled=true);
 }
 async function refreshAuthority(){
  try{nativeAuthority=await api('kubernetes/authority');}
@@ -26,7 +29,7 @@ async function refreshAuthority(){
  connectionUI();
 }
 function connectionUI(){el('refresh').disabled=!credential||busy;root.querySelectorAll('form button,#allow-save,#allow-apply,#policy-reload,#json-apply,#json-export,#rules-load,#rules-validate,#rules-save,#lua-validate,#lua-save,#geoip-status,#geoip-reload,#update-fetch,#kubernetes-status').forEach(b=>b.disabled=!credential||busy);root.querySelectorAll('[data-lock]').forEach(b=>b.disabled=!credential||busy||b.dataset.lock==='true');policyControls();authorityControls();}
-async function api(path,method='GET',body){if(nativeAuthority?.enabled&&method!=='GET'&&!['kubernetes/evaluate','lookup','networks/inspect','rules/validate','update/check'].includes(path))throw Error('Kubernetes source owns this policy; manual changes are disabled.');if(!credential||disposed)throw Error('Session ended');const result=await context.api(path,{method,json:body});if(disposed)throw Error('Session ended');return result.data;}
+async function api(path,method='GET',body){if((nativeAuthority===null||nativeAuthority.enabled)&&method!=='GET'&&!['kubernetes/evaluate','lookup','networks/inspect','rules/validate','update/check'].includes(path))throw Error('Kubernetes source owns this policy; manual changes are disabled.');if(!credential||disposed)throw Error('Session ended');const result=await context.api(path,{method,json:body});if(disposed)throw Error('Session ended');return result.data;}
 async function run(task,success){if(busy)return;busy=true;connectionUI();try{await task();if(success)show(success);}catch(error){show(error.message,true);}finally{busy=false;connectionUI();}}
 function setPolicyForm(policy){el('policy-mode').value=policy.mode;el('policy-auto').checked=Boolean(policy.auto_block);el('policy-window').value=policy.window_secs;el('policy-threshold').value=policy.threshold;el('policy-ttl').value=policy.block_ttl_secs;for(const kind of ['honeypot','scanner','auth_failure','invalid_request'])el('weight-'+kind).value=policy.weights[kind];}
 function readPolicy(){if(!savedPolicy)throw Error('정책을 먼저 불러오세요.');const weights={};for(const kind of ['honeypot','scanner','auth_failure','invalid_request'])weights[kind]=Number(el('weight-'+kind).value);return {mode:el('policy-mode').value,auto_block:el('policy-auto').checked,window_secs:Number(el('policy-window').value),threshold:Number(el('policy-threshold').value),block_ttl_secs:Number(el('policy-ttl').value),allow:[...allowDraft],weights};}

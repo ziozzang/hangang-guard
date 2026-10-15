@@ -9,7 +9,13 @@ with sync_playwright() as p:
  for name,mime in [('index.js','text/javascript'),('panel.html','text/html')]:
   page.route('http://owned.example.test/'+name,lambda route,request,name=name,mime=mime:route.fulfill(content_type=mime,body=(root/name).read_text()))
  page.goto('http://owned.example.test/')
- page.evaluate('''async()=>{const module=await import('/index.js');window.nativeOwned=false;window.nativeAvailable=true;window.offline=false;window.conflict=false;window.unknown=false;window.hold=false;window.refreshFail=false;window.calls=[];window.plugin=await module.mount({root:document.querySelector('#root'),asset:name=>fetch('/'+name),signal:new AbortController().signal,locale:()=>document.documentElement.lang,api:async(path,options)=>{calls.push({path,options});if(path==='policy/document'){if(options.method==='PUT'){if(conflict)throw Object.assign(Error('policy revision conflict; draft preserved.'),{status:409});if(unknown)throw Object.assign(Error('backend unavailable'),{status:unknown==='network'?undefined:503});if(hold)await new Promise(resolve=>window.releasePolicy=resolve);if(!options.json.expected_revision.startsWith('epoch:'))throw Error('wrong revision');return {data:{revision:'epoch:2',policy:options.json.policy}};}return {data:{revision:'epoch:1',policy:{mode:'observe',auto_block:false,window_secs:60,threshold:10,block_ttl_secs:900,allow:[],weights:{honeypot:10,scanner:5,auth_failure:1,invalid_request:2}}}};}if(path==='status'&&refreshFail)throw Error('refresh unavailable');if(path==='candidates'||path==='blocks')return {data:[]};if(path==='kubernetes/authority')return {data:{enabled:nativeOwned,available:nativeAvailable,remaining_ms:nativeAvailable?800:0,resource_version:'opaque-native'}};if(path.startsWith('kubernetes/')){if(offline)throw Error('source failed');return {data:path.endsWith('status')?{mode:'observe',fresh:true,policies:129,activated:false}:{decision:'denied',resource_version:'opaque',activated:false}};}return {data:{}};}});}''')
+ page.evaluate('''async()=>{const module=await import('/index.js');window.authorityFail=false;window.nativeOwned=false;window.nativeAvailable=true;window.offline=false;window.conflict=false;window.unknown=false;window.hold=false;window.refreshFail=false;window.calls=[];window.plugin=await module.mount({root:document.querySelector('#root'),asset:name=>fetch('/'+name),signal:new AbortController().signal,locale:()=>document.documentElement.lang,api:async(path,options)=>{calls.push({path,options});if(path==='policy/document'){if(options.method==='PUT'){if(conflict)throw Object.assign(Error('policy revision conflict; draft preserved.'),{status:409});if(unknown)throw Object.assign(Error('backend unavailable'),{status:unknown==='network'?undefined:503});if(hold)await new Promise(resolve=>window.releasePolicy=resolve);if(!options.json.expected_revision.startsWith('epoch:'))throw Error('wrong revision');return {data:{revision:'epoch:2',policy:options.json.policy}};}return {data:{revision:'epoch:1',policy:{mode:'observe',auto_block:false,window_secs:60,threshold:10,block_ttl_secs:900,allow:[],weights:{honeypot:10,scanner:5,auth_failure:1,invalid_request:2}}}};}if(path==='status'&&refreshFail)throw Error('refresh unavailable');if(path==='candidates'||path==='blocks')return {data:[]};if(path==='kubernetes/authority'&&authorityFail)throw Error('source status failed');if(path==='kubernetes/authority')return {data:{enabled:nativeOwned,available:nativeAvailable,remaining_ms:nativeAvailable?800:0,resource_version:'opaque-native'}};if(path.startsWith('kubernetes/')){if(offline)throw Error('source failed');return {data:path.endsWith('status')?{mode:'observe',fresh:true,policies:129,activated:false}:{decision:'denied',resource_version:'opaque',activated:false}};}return {data:{}};}});}''')
+ manual_fields=['#policy-threshold','#policy-mode','#policy-auto','#policy-json','#allow-network','#allow-text','#network','#reason','#ttl','#rules-json','#rules-lua']
+ for selector in manual_fields:
+  assert not page.locator(selector).is_disabled(),selector
+ page.locator('#tab-blocks').click();page.locator('#network').fill('127.0.0.1/32');page.locator('#reason').fill('owned default UI regression')
+ page.locator('#block-form button[type=submit]').click()
+ page.wait_for_function("calls.some(c=>c.path==='blocks'&&c.options.method==='POST'&&c.options.json.network==='127.0.0.1/32')")
  page.locator('#tab-policy').click();page.locator('#policy-threshold').fill('77')
  page.evaluate('conflict=true');page.locator('#policy-form button[type=submit]').click()
  page.locator('#message').filter(has_text='conflict').wait_for()
@@ -63,10 +69,21 @@ with sync_playwright() as p:
  page.locator('#kubernetes-namespace').fill('example');page.locator('#kubernetes-peer').fill('192.0.2.1');page.locator('#kubernetes-query button').click();page.wait_for_function("document.querySelector('#kubernetes-query-result').textContent.includes('denied')")
  page.evaluate('offline=true');page.locator('#kubernetes-status').click();page.wait_for_function("document.querySelector('#kubernetes-source-result').textContent.includes('source failed')")
  page.evaluate("document.documentElement.lang='ko'");page.wait_for_function("document.querySelector('#kubernetes-status').textContent==='원천 상태 새로고침'")
+ page.evaluate('offline=false;authorityFail=true');page.locator('#refresh').click()
+ page.wait_for_function("document.querySelector('#native-authority-status').textContent.includes('unavailable')")
+ for selector in manual_fields:
+  assert page.locator(selector).is_disabled(),selector
+ before=page.evaluate("calls.filter(c=>c.options.method==='POST'&&c.path==='blocks').length")
+ page.locator('#block-form').evaluate("form=>form.dispatchEvent(new Event('submit',{cancelable:true}))")
+ assert page.evaluate("calls.filter(c=>c.options.method==='POST'&&c.path==='blocks').length")==before
+ page.evaluate('authorityFail=false');page.locator('#refresh').click()
+ page.wait_for_function("!document.querySelector('#network').disabled")
+ for selector in manual_fields:
+  assert not page.locator(selector).is_disabled(),selector
  page.evaluate('offline=false;nativeOwned=true')
  page.locator('#refresh').click()
  page.wait_for_function("document.querySelector('#native-authority-status').textContent.includes('opaque-native')")
- for selector in ['#policy-form button[type=submit]','#allow-save','#rules-save','#lua-save','#block-form button[type=submit]','#geoip-reload']:
+ for selector in manual_fields+['#policy-form button[type=submit]','#allow-save','#rules-save','#lua-save','#block-form button[type=submit]','#geoip-reload']:
   assert page.locator(selector).is_disabled(),selector
  page.evaluate('nativeAvailable=false');page.locator('#refresh').click()
  page.wait_for_function("document.querySelector('#native-authority-status').textContent.includes('unavailable')")
@@ -74,4 +91,4 @@ with sync_playwright() as p:
  assert not errors,errors
  page.evaluate('plugin.dispose()');assert page.locator('#root').inner_text()==''
  browser.close()
-print('PASS: actual Chromium plugin mount, policy/allow CAS, pending input freeze, accepted-refresh-failure, unknown replay block, Kubernetes status/query, unavailable-state replacement, Korean switch, native authority freshness/manual mutation lock and disposal; mocked context API')
+print('PASS: actual Chromium plugin mount, policy/allow CAS, pending input freeze, accepted-refresh-failure, unknown replay block, Kubernetes status/query, unavailable-state replacement, Korean switch, native authority unknown/error/source locks, default input restoration and disposal; mocked context API')
