@@ -496,6 +496,9 @@ mod tests {
         let ingress = Arc::new(Semaphore::new(1));
         let first = predecode_frame(b"\x08\x07\x12\x04\xc0\x00\x02\x01");
         let second = predecode_frame(b"");
+        // A dispatched handler would fail with ResourceExhausted, distinguishing
+        // framing refusal from a domain-level decision/refusal.
+        requests.close();
         let (body, _) = predecode_body(vec![Bytes::from(first), Bytes::from(second)], false);
         let response =
             predecode_service_with_ingress(app.clone(), requests.clone(), ingress.clone())
@@ -507,7 +510,7 @@ mod tests {
                 .await
                 .unwrap();
         let (status, data) = predecode_response(response).await;
-        assert_ne!(status, tonic::Code::Ok as u16);
+        assert_eq!(status, tonic::Code::InvalidArgument as u16);
         assert!(data.is_empty());
         assert_eq!(ingress.available_permits(), 1);
         assert_eq!(requests.available_permits(), 1);
