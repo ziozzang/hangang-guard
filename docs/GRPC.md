@@ -3,8 +3,19 @@
 Caller authentication also runs before generated protobuf decoding. Bearer
 credentials belong in initial metadata; a credential supplied only in trailers
 is refused without polling the body. Native handler checks and the 2,048-byte
-message cap remain. Cumulative unary-body and aggregate decode budgets are
-separate shared-runtime work, not guarantees of the handler semaphore.
+message cap remain. A shared predecode budget admits at most
+`min(max_http_requests, 256)` service futures across this listener's connections,
+independently of handler admission. Exhaustion refuses before body polling.
+The shared runtime accepts exactly one uncompressed unary frame and counts actual
+DATA bytes, capped at 2,053 bytes including its prefix. Fragmentation is supported;
+extra frames, truncation and excess bytes fail closed without custom protobuf
+parsing. Prost and its existing per-message cap remain in place.
+
+At the default cap, simultaneous accepted encoded input is at most 513.25 KiB
+(256 × 2,053 bytes). This is a wire-data planning bound, not a process memory
+bound: decoded objects, HTTP/2 buffers and response bodies have separate costs.
+The permit lasts through decoding and handler completion/cancellation; it does
+not cover response draining or preempt synchronous CPU work.
 
 [한국어](ko/GRPC.md)
 

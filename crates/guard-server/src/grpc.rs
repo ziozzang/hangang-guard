@@ -122,14 +122,20 @@ pub async fn serve(
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let incoming = hangang_runtime::incoming(listener);
+    // Separate predecode budget, shared by every connection to this listener.
+    let ingress = Arc::new(Semaphore::new(app.max_http_requests.min(256)));
     hangang_runtime::server(tls)?
         .add_service(authenticate_transport(
-            NetworkServer::new(Service {
-                requests: Arc::new(Semaphore::new(app.max_http_requests)),
-                app: app.clone(),
-            })
-            .max_decoding_message_size(2048)
-            .max_encoding_message_size(1024),
+            hangang_runtime::unary_ingress::UnaryIngress::new(
+                NetworkServer::new(Service {
+                    requests: Arc::new(Semaphore::new(app.max_http_requests)),
+                    app: app.clone(),
+                })
+                .max_decoding_message_size(2048)
+                .max_encoding_message_size(1024),
+                ingress,
+                2048,
+            ),
             app,
         ))
         .serve_with_incoming_shutdown(incoming, async move {
@@ -324,6 +330,17 @@ mod tests {
         http::Response<Body>,
         std::convert::Infallible,
     > {
+        predecode_service_with_ingress(app, requests, Arc::new(Semaphore::new(1)))
+    }
+    fn predecode_service_with_ingress(
+        app: App,
+        requests: Arc<Semaphore>,
+        ingress: Arc<Semaphore>,
+    ) -> tower::util::BoxCloneService<
+        http::Request<Body>,
+        http::Response<Body>,
+        std::convert::Infallible,
+    > {
         let generated = NetworkServer::new(Service {
             app: app.clone(),
             requests,
@@ -331,7 +348,10 @@ mod tests {
         .max_decoding_message_size(2048)
         .max_encoding_message_size(1024);
         tower::util::BoxCloneService::new(tower::ServiceExt::<http::Request<Body>>::map_response(
-            authenticate_transport(generated, app),
+            authenticate_transport(
+                hangang_runtime::unary_ingress::UnaryIngress::new(generated, ingress, 2048),
+                app,
+            ),
             |response| response.map(Body::new),
         ))
     }
@@ -468,5 +488,45 @@ mod tests {
         assert_eq!(polls.load(Ordering::SeqCst), 0);
         assert_eq!(trailers_polled.load(Ordering::SeqCst), 0);
         assert_eq!(requests.available_permits(), 1);
+    }
+    #[tokio::test]
+    async fn unary_ingress_rejects_multiple_messages_and_recovers_capacity() {
+        let app = crate::tests::app();
+        let requests = Arc::new(Semaphore::new(1));
+        let ingress = Arc::new(Semaphore::new(1));
+        let first = predecode_frame(b"\x08\x07\x12\x04\xc0\x00\x02\x01");
+        let second = predecode_frame(b"");
+        let (body, _) = predecode_body(vec![Bytes::from(first), Bytes::from(second)], false);
+        let response =
+            predecode_service_with_ingress(app.clone(), requests.clone(), ingress.clone())
+                .oneshot(predecode_request(
+                    PREDECODE_PATH,
+                    &["Bearer collector-test-token"],
+                    body,
+                ))
+                .await
+                .unwrap();
+        let (status, data) = predecode_response(response).await;
+        assert_ne!(status, tonic::Code::Ok as u16);
+        assert!(data.is_empty());
+        assert_eq!(ingress.available_permits(), 1);
+        assert_eq!(requests.available_permits(), 1);
+        let held = ingress.clone().try_acquire_owned().unwrap();
+        let (body, polls) = predecode_body(vec![], true);
+        let response = predecode_service_with_ingress(app, requests, ingress.clone())
+            .oneshot(predecode_request(
+                PREDECODE_PATH,
+                &["Bearer collector-test-token"],
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            predecode_response(response).await.0,
+            tonic::Code::ResourceExhausted as u16
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        drop(held);
+        assert_eq!(ingress.available_permits(), 1);
     }
 }
