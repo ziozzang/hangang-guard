@@ -581,3 +581,20 @@ package, with Hangang World zero-trust authority as the original domain source.
 Individual adapters are intermediate gates, not final success. Before subsequent
 cluster-changing tests, create/verify node backups and record recovery paths;
 prioritize functional tests in the supplied environment.
+
+## Console plugin locale lifecycle internally deployed — 2026-10-15
+
+Guard console plugin v0.1.4 (source `d314d87`, public release
+`console-plugin-v0.1.4`) re-renders authority status, cards, refresh times and
+dirty markers from cached state when the host locale changes. It uses the host
+`onLocaleChange` notification (Hangang `13983ec`) and falls back to observing the
+document `lang` attribute on older hosts; drafts are not refetched or replaced.
+The public release round trip and package verification pass. Guard 0.1.4 and
+Hopae 0.1.6 are installed internally with a backup; core binary, backend
+bindings, runtime argv/environment and policy/profile documents are unchanged.
+The first upgrade attempt rolled back safely on unstable systemd ExecStart
+metadata comparison; the corrected stable comparison passed. Real HTTPS Chromium
+qualification passes English/Korean switching without remount, back/forward,
+390px layout without overflow, GET-only plugin requests, logout disposal and no
+page errors. No policy mutation was exercised. This is a console package change
+only; no server, cluster or enforcement change.
